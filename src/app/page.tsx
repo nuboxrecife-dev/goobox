@@ -127,13 +127,15 @@ export default function Dashboard() {
 
       // Merge current active session details if customized
       if (sessionUser) {
-        setUser({
+        const mergedUser = {
           ...userData,
           name: sessionUser.name,
           email: sessionUser.email,
-          balance: sessionUser.balance, // use session storage to persist simulation balance
+          balance: userData.balance, // Use real balance from the database as source of truth
           role: sessionUser.role || userData.role || 'user'
-        });
+        };
+        sessionStorage.setItem('goobox_session', JSON.stringify(mergedUser));
+        setUser(mergedUser);
       } else {
         setUser(userData);
       }
