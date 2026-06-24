@@ -2,14 +2,21 @@ import { NextResponse } from 'next/server';
 import { dbHelper } from '@/lib/db';
 import { supplierClient } from '@/lib/supplier';
 
-export async function GET() {
-  const orders = await dbHelper.getOrders();
-  return NextResponse.json(orders);
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const email = searchParams.get('email') || undefined;
+    const orders = await dbHelper.getOrders(email);
+    return NextResponse.json(orders);
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    return NextResponse.json({ error: 'Erro ao carregar pedidos.' }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
   try {
-    const { serviceId, link, quantity } = await request.json();
+    const { serviceId, link, quantity, userEmail } = await request.json();
 
     if (!serviceId || !link || !quantity || quantity <= 0) {
       return NextResponse.json(
@@ -36,9 +43,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const rate = parseFloat(service.rate);
-    const charge = (rate / 1000) * quantity;
-    const user = await dbHelper.getUser();
+    const baseRate = parseFloat(service.rate);
+    const markupStr = await dbHelper.getSetting('service_markup_percent', '20');
+    const markupPercent = parseFloat(markupStr);
+    const sellingRate = baseRate * (1 + markupPercent / 100);
+    const charge = (sellingRate / 1000) * quantity;
+    const user = await dbHelper.getUser(userEmail || undefined);
 
     // Verificação de saldo simulado do usuário (ou da sessão)
     // O front-end gerencia a redução local do saldo do usuário logado na sessão também.

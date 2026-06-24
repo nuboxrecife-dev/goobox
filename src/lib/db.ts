@@ -13,6 +13,7 @@ export interface UserStats {
   totalSpent: number;
   status: string;
   passwordHash?: string;
+  role?: string;
 }
 
 export interface Service {
@@ -83,7 +84,8 @@ const INITIAL_DB: DatabaseSchema = {
     balance: 0.03095,
     totalOrders: 1475,
     totalSpent: 412.50,
-    status: 'Elite'
+    status: 'Elite',
+    role: 'admin'
   },
   usersList: [],
   services: DEFAULT_SERVICES,
@@ -131,7 +133,8 @@ export const dbHelper = {
           totalOrders: data.total_orders,
           totalSpent: parseFloat(data.total_spent),
           status: data.status,
-          passwordHash: data.password_hash
+          passwordHash: data.password_hash,
+          role: data.role
         };
       } catch (err) {
         console.error('Supabase error, falling back to local JSON db:', err);
@@ -140,13 +143,15 @@ export const dbHelper = {
 
     // Local Fallback
     const db = getLocalDb();
-    if (db.user.email === email) return db.user;
+    if (db.user.email === email) return { ...db.user, role: db.user.role || 'admin' };
     const users = db.usersList || [];
-    return users.find(u => u.email === email) || null;
+    const found = users.find(u => u.email === email);
+    return found ? { ...found, role: found.role || 'user' } : null;
   },
 
   createUser: async (user: Omit<UserStats, 'totalOrders' | 'totalSpent' | 'status'>): Promise<UserStats> => {
     const startingBalance = 50.00; // Gift starting balance for testing
+    const role = user.email.toLowerCase() === 'admin@goobox.com' ? 'admin' : 'user';
     
     if (supabase) {
       try {
@@ -159,7 +164,8 @@ export const dbHelper = {
             balance: startingBalance,
             total_orders: 0,
             total_spent: 0.00,
-            status: 'Iniciante'
+            status: 'Iniciante',
+            role: role
           })
           .select()
           .single();
@@ -173,7 +179,8 @@ export const dbHelper = {
           balance: parseFloat(data.balance),
           totalOrders: data.total_orders,
           totalSpent: parseFloat(data.total_spent),
-          status: data.status
+          status: data.status,
+          role: data.role
         };
       } catch (err) {
         console.error('Supabase error, creating user in local JSON db:', err);
@@ -189,7 +196,8 @@ export const dbHelper = {
       totalOrders: 0,
       totalSpent: 0.00,
       status: 'Iniciante',
-      passwordHash: user.passwordHash
+      passwordHash: user.passwordHash,
+      role: role
     };
     if (!db.usersList) db.usersList = [];
     db.usersList.push(newUser);
@@ -220,7 +228,8 @@ export const dbHelper = {
             balance: parseFloat(data.balance),
             totalOrders: data.total_orders,
             totalSpent: parseFloat(data.total_spent),
-            status: data.status
+            status: data.status,
+            role: data.role
           };
         }
       } catch (err) {
@@ -228,7 +237,8 @@ export const dbHelper = {
       }
     }
 
-    return getLocalDb().user;
+    const localUser = getLocalDb().user;
+    return { ...localUser, role: localUser.role || 'admin' };
   },
 
   updateUserBalance: async (email: string, amount: number): Promise<void> => {
@@ -493,5 +503,107 @@ export const dbHelper = {
       return payment;
     }
     return null;
+  },
+
+  // Admin Operations
+  getAllUsers: async (): Promise<UserStats[]> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return (data || []).map(u => ({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          balance: parseFloat(u.balance),
+          totalOrders: u.total_orders,
+          totalSpent: parseFloat(u.total_spent),
+          status: u.status,
+          role: u.role
+        }));
+      } catch (err) {
+        console.error('Supabase fetch users failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    const mainUser = { ...db.user, role: db.user.role || 'admin' };
+    const list = (db.usersList || []).map(u => ({ ...u, role: u.role || 'user' }));
+    return [mainUser, ...list];
+  },
+
+  adjustUserBalance: async (email: string, amount: number): Promise<void> => {
+    if (supabase) {
+      try {
+        const user = await dbHelper.getUserByEmail(email);
+        if (user) {
+          const newBalance = user.balance + amount;
+          const { error } = await supabase
+            .from('users')
+            .update({ balance: newBalance })
+            .eq('email', email);
+
+          if (error) throw error;
+          return;
+        }
+      } catch (err) {
+        console.error('Supabase adjust balance failed:', err);
+      }
+    }
+    
+    const db = getLocalDb();
+    const isMainUser = db.user.email === email;
+    const targetUser = isMainUser ? db.user : (db.usersList || []).find(u => u.email === email);
+    if (targetUser) {
+      targetUser.balance += amount;
+      saveLocalDb(db);
+    }
+  },
+
+  getSetting: async (key: string, defaultValue: string): Promise<string> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('settings')
+          .select('value')
+          .eq('key', key)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (data) return data.value;
+      } catch (err) {
+        console.error('Supabase get setting failed:', err);
+      }
+    }
+    const db = getLocalDb() as any;
+    if (!db.settings) db.settings = {};
+    if (db.settings[key] === undefined) {
+      db.settings[key] = defaultValue;
+      saveLocalDb(db);
+    }
+    return db.settings[key];
+  },
+
+  updateSetting: async (key: string, value: string): Promise<void> => {
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('settings')
+          .upsert({ key, value })
+          .eq('key', key);
+
+        if (error) throw error;
+        return;
+      } catch (err) {
+        console.error('Supabase update setting failed:', err);
+      }
+    }
+    const db = getLocalDb() as any;
+    if (!db.settings) db.settings = {};
+    db.settings[key] = value;
+    saveLocalDb(db);
   }
 };

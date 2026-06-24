@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 
-type Tab = 'novo-pedido' | 'servicos' | 'adicionar-saldo' | 'pedidos' | 'api';
+type Tab = 'novo-pedido' | 'servicos' | 'adicionar-saldo' | 'pedidos' | 'api' | 'admin';
 type AuthScreen = 'login' | 'register';
 
 interface UserStats {
@@ -12,6 +12,7 @@ interface UserStats {
   totalOrders: number;
   totalSpent: number;
   status: string;
+  role?: string;
 }
 
 interface Service {
@@ -75,6 +76,16 @@ export default function Dashboard() {
   const [pixLoading, setPixLoading] = useState(false);
   const [pixFeedback, setPixFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Admin Panel states
+  const [adminUsers, setAdminUsers] = useState<UserStats[]>([]);
+  const [markupPercent, setMarkupPercent] = useState<number>(20);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminFeedback, setAdminFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [adjustingUserEmail, setAdjustingUserEmail] = useState('');
+  const [adjustmentAmount, setAdjustmentAmount] = useState('10.00');
+  const [isAdjustingBalance, setIsAdjustingBalance] = useState(false);
+  const [isSavingMarkup, setIsSavingMarkup] = useState(false);
+
   // Check auth session
   useEffect(() => {
     const savedSession = sessionStorage.getItem('goobox_session');
@@ -94,10 +105,14 @@ export default function Dashboard() {
   const fetchData = async () => {
     if (!isAuthenticated) return;
     try {
+      const sessionUserStr = sessionStorage.getItem('goobox_session');
+      const sessionUser = sessionUserStr ? JSON.parse(sessionUserStr) : null;
+      const emailParam = sessionUser?.email ? `?email=${encodeURIComponent(sessionUser.email)}` : '';
+
       const [userRes, servicesRes, ordersRes] = await Promise.all([
-        fetch('/api/user'),
+        fetch(`/api/user${emailParam}`),
         fetch('/api/services'),
-        fetch('/api/orders')
+        fetch(`/api/orders${emailParam}`)
       ]);
 
       const userData = await userRes.json();
@@ -105,14 +120,13 @@ export default function Dashboard() {
       const ordersData = await ordersRes.json();
 
       // Merge current active session details if customized
-      const currentSession = sessionStorage.getItem('goobox_session');
-      if (currentSession) {
-        const sessionUser = JSON.parse(currentSession);
+      if (sessionUser) {
         setUser({
           ...userData,
           name: sessionUser.name,
           email: sessionUser.email,
-          balance: sessionUser.balance // use session storage to persist simulation balance
+          balance: sessionUser.balance, // use session storage to persist simulation balance
+          role: sessionUser.role || userData.role || 'user'
         });
       } else {
         setUser(userData);
@@ -127,6 +141,90 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Erro ao buscar dados:', error);
+    }
+  };
+
+  const fetchAdminData = async () => {
+    if (!isAuthenticated || user?.role !== 'admin') return;
+    setAdminLoading(true);
+    try {
+      const [usersRes, settingsRes] = await Promise.all([
+        fetch('/api/admin/users'),
+        fetch('/api/admin/settings')
+      ]);
+      if (usersRes.ok && settingsRes.ok) {
+        const usersData = await usersRes.json();
+        const settingsData = await settingsRes.json();
+        setAdminUsers(usersData);
+        setMarkupPercent(settingsData.serviceMarkupPercent);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar dados do admin:', err);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'admin' && user?.role === 'admin') {
+      fetchAdminData();
+    }
+  }, [activeTab, user]);
+
+  const handleUpdateMarkup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminFeedback(null);
+    setIsSavingMarkup(true);
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceMarkupPercent: markupPercent })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminFeedback({ success: true, message: 'Margem de lucro atualizada!' });
+        fetchData();
+      } else {
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao atualizar margem.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setAdminFeedback({ success: false, message: 'Erro de conexão.' });
+    } finally {
+      setIsSavingMarkup(false);
+    }
+  };
+
+  const handleAdjustBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminFeedback(null);
+    if (!adjustingUserEmail) return;
+    setIsAdjustingBalance(true);
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: adjustingUserEmail, amount: parseFloat(adjustmentAmount) })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminFeedback({ success: true, message: data.message || 'Saldo atualizado com sucesso!' });
+        setAdjustmentAmount('10.00');
+        fetchAdminData();
+        if (user && adjustingUserEmail.toLowerCase() === user.email.toLowerCase()) {
+          const updatedUser = { ...user, balance: user.balance + parseFloat(adjustmentAmount) };
+          sessionStorage.setItem('goobox_session', JSON.stringify(updatedUser));
+          setUser(updatedUser);
+        }
+      } else {
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao atualizar saldo.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setAdminFeedback({ success: false, message: 'Erro de conexão.' });
+    } finally {
+      setIsAdjustingBalance(false);
     }
   };
 
@@ -167,23 +265,58 @@ export default function Dashboard() {
       return;
     }
 
+    const userName = authEmail.split('@')[0];
+    const displayName = userName.charAt(0).toUpperCase() + userName.slice(1);
+    const isElite = authEmail.toLowerCase() === 'admin@goobox.com';
+    const role = isElite ? 'admin' : 'user';
+
     if (authScreen === 'login') {
       // Login simulation (Accepts admin@goobox.com, or any email for demonstration ease!)
-      const userName = authEmail.split('@')[0];
-      const displayName = userName.charAt(0).toUpperCase() + userName.slice(1);
-      
-      const loggedUser: UserStats = {
-        name: displayName,
-        email: authEmail,
-        balance: 0.03095,
-        totalOrders: 1475,
-        totalSpent: 412.50,
-        status: 'Elite'
-      };
-
-      sessionStorage.setItem('goobox_session', JSON.stringify(loggedUser));
-      setUser(loggedUser);
-      setIsAuthenticated(true);
+      fetch(`/api/user?email=${encodeURIComponent(authEmail)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && !data.error) {
+            const loggedUser: UserStats = {
+              name: data.name || displayName,
+              email: data.email || authEmail,
+              balance: data.balance !== undefined ? data.balance : (isElite ? 0.03095 : 50.00),
+              totalOrders: data.totalOrders !== undefined ? data.totalOrders : (isElite ? 1475 : 0),
+              totalSpent: data.totalSpent !== undefined ? data.totalSpent : (isElite ? 412.50 : 0.00),
+              status: data.status || (isElite ? 'Elite' : 'Iniciante'),
+              role: data.role || role
+            };
+            sessionStorage.setItem('goobox_session', JSON.stringify(loggedUser));
+            setUser(loggedUser);
+            setIsAuthenticated(true);
+          } else {
+            const loggedUser: UserStats = {
+              name: displayName,
+              email: authEmail,
+              balance: isElite ? 0.03095 : 50.00,
+              totalOrders: isElite ? 1475 : 0,
+              totalSpent: isElite ? 412.50 : 0.00,
+              status: isElite ? 'Elite' : 'Iniciante',
+              role: role
+            };
+            sessionStorage.setItem('goobox_session', JSON.stringify(loggedUser));
+            setUser(loggedUser);
+            setIsAuthenticated(true);
+          }
+        })
+        .catch(() => {
+          const loggedUser: UserStats = {
+            name: displayName,
+            email: authEmail,
+            balance: isElite ? 0.03095 : 50.00,
+            totalOrders: isElite ? 1475 : 0,
+            totalSpent: isElite ? 412.50 : 0.00,
+            status: isElite ? 'Elite' : 'Iniciante',
+            role: role
+          };
+          sessionStorage.setItem('goobox_session', JSON.stringify(loggedUser));
+          setUser(loggedUser);
+          setIsAuthenticated(true);
+        });
     } else {
       // Register simulation: Initializes user with R$ 50,00 so they can immediately test placing SMM orders!
       if (!authName) {
@@ -197,7 +330,8 @@ export default function Dashboard() {
         balance: 50.00, // starting balance gift to test the SMM flow!
         totalOrders: 0,
         totalSpent: 0.0,
-        status: 'Iniciante'
+        status: 'Iniciante',
+        role: role
       };
 
       sessionStorage.setItem('goobox_session', JSON.stringify(registeredUser));
@@ -239,7 +373,8 @@ export default function Dashboard() {
         body: JSON.stringify({
           serviceId: selectedServiceId,
           link: orderLink,
-          quantity: orderQuantity
+          quantity: orderQuantity,
+          userEmail: user?.email
         })
       });
 
@@ -494,6 +629,15 @@ export default function Dashboard() {
           </svg>
           <span>API</span>
         </div>
+        {user?.role === 'admin' && (
+          <div className={`mobile-nav-item ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>
+            <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+            <span>Admin</span>
+          </div>
+        )}
       </nav>
 
       {/* Sidebar */}
@@ -544,6 +688,15 @@ export default function Dashboard() {
               </svg>
               <span>API Integração</span>
             </li>
+            {user?.role === 'admin' && (
+              <li className={`menu-item ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>
+                <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+                </svg>
+                <span>Administrador</span>
+              </li>
+            )}
           </ul>
         </div>
 
@@ -997,6 +1150,172 @@ export default function Dashboard() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'admin' && user?.role === 'admin' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="content-split">
+              {/* Markup settings card */}
+              <div className="panel-card">
+                <div className="panel-header">
+                  <div className="panel-header-icon">📈</div>
+                  <div className="panel-header-info">
+                    <h2>Margem de Lucro dos Serviços</h2>
+                    <p>Defina a porcentagem de lucro cobrada acima do fornecedor</p>
+                  </div>
+                </div>
+
+                {adminFeedback && adminFeedback.message.includes('Margem') && (
+                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                    {adminFeedback.message}
+                  </div>
+                )}
+
+                <form onSubmit={handleUpdateMarkup}>
+                  <div className="form-group">
+                    <label className="form-label">Markup Global (%)</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      style={{ fontSize: '18px', fontWeight: 'bold' }}
+                      value={markupPercent}
+                      onChange={(e) => setMarkupPercent(parseFloat(e.target.value) || 0)}
+                      min="0"
+                      max="500"
+                      step="1"
+                      required
+                    />
+                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Exemplo: 20% de markup transformará um custo de fornecedor de R$ 5,00 em R$ 6,00 para os clientes.
+                    </small>
+                  </div>
+                  <button type="submit" className="submit-btn" disabled={isSavingMarkup}>
+                    {isSavingMarkup ? 'Salvando...' : 'Salvar Margem de Lucro'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Quick balance adjustment card */}
+              <div className="panel-card">
+                <div className="panel-header secondary">
+                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(0, 191, 165, 0.15)', color: 'var(--success)' }}>💰</div>
+                  <div className="panel-header-info">
+                    <h2>Adicionar / Retirar Saldo</h2>
+                    <p>Ajuste o saldo de qualquer usuário na plataforma</p>
+                  </div>
+                </div>
+
+                {adminFeedback && adminFeedback.message.includes('Saldo') && (
+                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                    {adminFeedback.message}
+                  </div>
+                )}
+
+                <form onSubmit={handleAdjustBalance}>
+                  <div className="form-group">
+                    <label className="form-label">Selecionar Usuário</label>
+                    <select
+                      className="form-select"
+                      value={adjustingUserEmail}
+                      onChange={(e) => setAdjustingUserEmail(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione um usuário...</option>
+                      {adminUsers.map((u) => (
+                        <option key={u.email} value={u.email}>
+                          {u.name} ({u.email}) - Saldo: R$ {u.balance.toFixed(2)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Valor do Ajuste (BRL)</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      style={{ fontFamily: 'monospace' }}
+                      value={adjustmentAmount}
+                      onChange={(e) => setAdjustmentAmount(e.target.value)}
+                      placeholder="Ex: 50.00 ou -20.00"
+                      step="0.01"
+                      required
+                    />
+                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Valores positivos adicionam saldo. Valores negativos subtraem saldo.
+                    </small>
+                  </div>
+
+                  <button type="submit" className="submit-btn" style={{ background: 'linear-gradient(135deg, var(--success) 0%, #00897b 100%)', boxShadow: '0 4px 15px rgba(0, 191, 165, 0.2)' }} disabled={isAdjustingBalance || !adjustingUserEmail}>
+                    {isAdjustingBalance ? 'Processando...' : 'Aplicar Ajuste de Saldo'}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Users table card */}
+            <div className="panel-card">
+              <div className="panel-header secondary">
+                <div className="panel-header-icon">👥</div>
+                <div className="panel-header-info">
+                  <h2>Usuários Cadastrados</h2>
+                  <p>Visualize e administre as contas e dados de uso dos clientes</p>
+                </div>
+              </div>
+
+              {adminLoading ? (
+                <p style={{ color: 'var(--text-secondary)', padding: '24px', textAlign: 'center' }}>Buscando dados de usuários...</p>
+              ) : (
+                <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+                  <table className="smm-table">
+                    <thead>
+                      <tr>
+                        <th>Nome</th>
+                        <th>E-mail</th>
+                        <th>Status</th>
+                        <th>Função</th>
+                        <th>Saldo</th>
+                        <th>Pedidos Realizados</th>
+                        <th>Total Gasto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                            Nenhum usuário cadastrado.
+                          </td>
+                        </tr>
+                      ) : (
+                        adminUsers.map((u) => (
+                          <tr key={u.email}>
+                            <td style={{ fontWeight: '600' }}>{u.name}</td>
+                            <td>{u.email}</td>
+                            <td>
+                              <span className="badge processing" style={{ textTransform: 'capitalize' }}>{u.status}</span>
+                            </td>
+                            <td>
+                              <span className="badge" style={{ 
+                                backgroundColor: u.role === 'admin' ? 'rgba(255, 51, 102, 0.15)' : 'rgba(108, 37, 226, 0.15)',
+                                color: u.role === 'admin' ? 'var(--error)' : 'var(--primary)'
+                              }}>
+                                {u.role === 'admin' ? 'Administrador' : 'Cliente'}
+                              </span>
+                            </td>
+                            <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
+                              R$ {u.balance.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}
+                            </td>
+                            <td>{u.totalOrders}</td>
+                            <td>R$ {u.totalSpent.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

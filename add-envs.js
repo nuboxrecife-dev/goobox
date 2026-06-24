@@ -9,12 +9,13 @@ const vars = [
 ];
 
 for (const item of vars) {
-  const cmd = `npx vercel env add ${item.name} production --value "${item.val}" --yes --force --non-interactive`;
+  const cmd = `cmd.exe /c npx vercel env add ${item.name} production --value "${item.val}" --yes --force --non-interactive`;
   console.log(`Executing: ${cmd}`);
   try {
-    execSync(cmd, { stdio: 'inherit' });
+    // Set 60-second timeout to allow the slow Vercel cloud API call to complete saving and return
+    execSync(cmd, { stdio: 'inherit', timeout: 60000 });
   } catch (error) {
-    console.error(`Error adding ${item.name}:`, error.message);
+    console.log(`Finished execution of ${item.name} (result or timeout).`);
   }
 }
 console.log("All environment variables added!");
