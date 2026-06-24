@@ -45,6 +45,17 @@ interface Payment {
   createdAt: string;
 }
 
+interface Coupon {
+  code: string;
+  type: 'percentage' | 'fixed';
+  value: number;
+  minDeposit: number;
+  maxUses?: number | null;
+  usedCount: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
 export default function Dashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
@@ -121,6 +132,24 @@ export default function Dashboard() {
   const [serviceFormDescription, setServiceFormDescription] = useState('');
   const [isSavingService, setIsSavingService] = useState(false);
 
+  // Coupons management and usage states
+  const [adminCoupons, setAdminCoupons] = useState<Coupon[]>([]);
+  const [adminCouponsLoading, setAdminCouponsLoading] = useState(false);
+  const [createCouponCode, setCreateCouponCode] = useState('');
+  const [createCouponType, setCreateCouponType] = useState<'percentage' | 'fixed'>('percentage');
+  const [createCouponValue, setCreateCouponValue] = useState('');
+  const [createCouponMinDeposit, setCreateCouponMinDeposit] = useState('0.00');
+  const [createCouponMaxUses, setCreateCouponMaxUses] = useState('');
+  const [isCreatingCoupon, setIsCreatingCoupon] = useState(false);
+
+  // User coupons states
+  const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponFeedback, setCouponFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [directCouponInput, setDirectCouponInput] = useState('');
+  const [directCouponFeedback, setDirectCouponFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [isRedeemingDirect, setIsRedeemingDirect] = useState(false);
+
   // Check auth session
   useEffect(() => {
     const savedSession = sessionStorage.getItem('goobox_session');
@@ -195,19 +224,23 @@ export default function Dashboard() {
   const fetchAdminData = async () => {
     if (!isAuthenticated || user?.role !== 'admin') return;
     setAdminLoading(true);
+    setAdminCouponsLoading(true);
     try {
-      const [usersRes, settingsRes, metricsRes] = await Promise.all([
+      const [usersRes, settingsRes, metricsRes, couponsRes] = await Promise.all([
         fetch('/api/admin/users'),
         fetch('/api/admin/settings'),
-        fetch('/api/admin/metrics')
+        fetch('/api/admin/metrics'),
+        fetch('/api/admin/coupons')
       ]);
-      if (usersRes.ok && settingsRes.ok && metricsRes.ok) {
+      if (usersRes.ok && settingsRes.ok && metricsRes.ok && couponsRes.ok) {
         const usersData = await usersRes.json();
         const settingsData = await settingsRes.json();
         const metricsData = await metricsRes.json();
+        const couponsData = await couponsRes.json();
         setAdminUsers(usersData);
         setMarkupPercent(settingsData.serviceMarkupPercent);
         setAdminMetrics(metricsData);
+        setAdminCoupons(couponsData);
         if (settingsData.supportWhatsappNumber) {
           setWhatsappNumber(settingsData.supportWhatsappNumber);
         }
@@ -216,6 +249,7 @@ export default function Dashboard() {
       console.error('Erro ao buscar dados do admin:', err);
     } finally {
       setAdminLoading(false);
+      setAdminCouponsLoading(false);
     }
   };
 
@@ -633,7 +667,11 @@ export default function Dashboard() {
       const res = await fetch('/api/payment/pix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: amountNum, userEmail: user?.email })
+        body: JSON.stringify({ 
+          amount: amountNum, 
+          userEmail: user?.email,
+          couponCode: appliedCoupon ? appliedCoupon.code : undefined
+        })
       });
 
       const data = await res.json();
@@ -669,8 +707,20 @@ export default function Dashboard() {
         setGeneratedPix(prev => prev ? { ...prev, status: 'approved' } : null);
         setPixFeedback({ success: true, message: 'Pagamento aprovado via simulação de webhook!' });
         
-        // Add balance to current frontend session
-        const newBalance = user.balance + generatedPix.amount;
+        // Add balance to current frontend session (including coupon bonus if any)
+        let finalAmount = generatedPix.amount;
+        if (appliedCoupon) {
+          if (appliedCoupon.type === 'percentage') {
+            finalAmount += parseFloat((generatedPix.amount * (appliedCoupon.value / 100)).toFixed(2));
+          } else {
+            finalAmount += appliedCoupon.value;
+          }
+          setAppliedCoupon(null);
+          setCouponCodeInput('');
+          setCouponFeedback(null);
+        }
+        
+        const newBalance = user.balance + finalAmount;
         const updatedUser = { ...user, balance: newBalance };
         sessionStorage.setItem('goobox_session', JSON.stringify(updatedUser));
         setUser(updatedUser);
@@ -683,6 +733,141 @@ export default function Dashboard() {
     } catch (err) {
       console.error(err);
       setPixFeedback({ success: false, message: 'Erro de rede na simulação.' });
+    }
+  };
+
+  // Coupons Client Actions
+  const handleApplyCoupon = async () => {
+    if (!couponCodeInput || !user) return;
+    setCouponFeedback(null);
+    try {
+      const res = await fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: couponCodeInput.toUpperCase(),
+          email: user.email,
+          depositAmount: parseFloat(depositAmount) || 0
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCouponFeedback({ success: false, message: data.error || 'Erro ao aplicar cupom.' });
+        setAppliedCoupon(null);
+      } else {
+        setAppliedCoupon(data.coupon);
+        const bonusValue = data.coupon.type === 'percentage' 
+          ? `${data.coupon.value}%` 
+          : `R$ ${data.coupon.value.toFixed(2)}`;
+        setCouponFeedback({ 
+          success: true, 
+          message: `Cupom ${data.coupon.code} aplicado! Bônus: ${bonusValue}.` 
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      setCouponFeedback({ success: false, message: 'Erro de conexão ao aplicar cupom.' });
+      setAppliedCoupon(null);
+    }
+  };
+
+  const handleRedeemDirectCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!directCouponInput || !user) return;
+    setIsRedeemingDirect(true);
+    setDirectCouponFeedback(null);
+    try {
+      const res = await fetch('/api/coupons/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: directCouponInput.toUpperCase(),
+          email: user.email
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDirectCouponFeedback({ success: false, message: data.error || 'Erro ao resgatar cupom.' });
+      } else {
+        setDirectCouponFeedback({ success: true, message: data.message });
+        setDirectCouponInput('');
+        
+        // Update user stats
+        const updatedUser: UserStats = {
+          ...user,
+          balance: data.newBalance
+        };
+        sessionStorage.setItem('goobox_session', JSON.stringify(updatedUser));
+        setUser(updatedUser);
+        fetchData();
+      }
+    } catch (err) {
+      console.error(err);
+      setDirectCouponFeedback({ success: false, message: 'Erro de conexão ao resgatar cupom.' });
+    } finally {
+      setIsRedeemingDirect(false);
+    }
+  };
+
+  // Coupons Admin Actions
+  const handleCreateCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminFeedback(null);
+    setIsCreatingCoupon(true);
+    try {
+      const res = await fetch('/api/admin/coupons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          code: createCouponCode.toUpperCase(),
+          type: createCouponType,
+          value: parseFloat(createCouponValue),
+          minDeposit: parseFloat(createCouponMinDeposit),
+          maxUses: createCouponMaxUses ? parseInt(createCouponMaxUses) : null
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao criar cupom.' });
+      } else {
+        setAdminFeedback({ success: true, message: data.message });
+        setCreateCouponCode('');
+        setCreateCouponValue('');
+        setCreateCouponMinDeposit('0.00');
+        setCreateCouponMaxUses('');
+        fetchAdminData();
+      }
+    } catch (err) {
+      console.error(err);
+      setAdminFeedback({ success: false, message: 'Erro de conexão ao criar cupom.' });
+    } finally {
+      setIsCreatingCoupon(false);
+    }
+  };
+
+  const handleDeleteCoupon = async (code: string) => {
+    if (!confirm(`Tem certeza que deseja excluir o cupom ${code}?`)) return;
+    setAdminFeedback(null);
+    try {
+      const res = await fetch('/api/admin/coupons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete',
+          code: code
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao excluir cupom.' });
+      } else {
+        setAdminFeedback({ success: true, message: data.message });
+        fetchAdminData();
+      }
+    } catch (err) {
+      console.error(err);
+      setAdminFeedback({ success: false, message: 'Erro de conexão ao excluir cupom.' });
     }
   };
 
@@ -1167,46 +1352,120 @@ export default function Dashboard() {
 
         {activeTab === 'adicionar-saldo' && (
           <>
-            <div className="panel-card">
-            <div className="panel-header">
-              <div className="panel-header-icon">💸</div>
-              <div className="panel-header-info">
-                <h2>Adicionar Saldo com Pix Mercado Pago</h2>
-                <p>Reabasteça sua conta instantaneamente 24 horas por dia via Pix.</p>
-              </div>
-            </div>
+            <div className="content-split">
+              {/* Pix deposit card */}
+              <div className="panel-card" style={{ margin: 0 }}>
+                <div className="panel-header">
+                  <div className="panel-header-icon">💸</div>
+                  <div className="panel-header-info">
+                    <h2>Adicionar Saldo com Pix</h2>
+                    <p>Reabasteça sua conta instantaneamente 24 horas por dia via Pix.</p>
+                  </div>
+                </div>
 
-            <div className="pix-container">
-              {/* Form Input */}
-              <div>
-                <form onSubmit={handleGeneratePix}>
+                <div className="pix-container" style={{ display: 'block', padding: 0, marginTop: '20px' }}>
+                  {/* Form Input */}
+                  <div>
+                    <form onSubmit={handleGeneratePix}>
+                      <div className="form-group">
+                        <label className="form-label">Valor da Recarga (BRL)</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          style={{ fontSize: '18px', fontWeight: 'bold' }}
+                          value={depositAmount}
+                          onChange={(e) => {
+                            setDepositAmount(e.target.value);
+                            setAppliedCoupon(null);
+                            setCouponFeedback(null);
+                          }}
+                          placeholder="Min: R$ 1,00"
+                          min="1.00"
+                          step="0.01"
+                          required
+                        />
+                      </div>
+
+                      <div className="form-group" style={{ marginTop: '14px' }}>
+                        <label className="form-label">Cupom de Recarga (Opcional)</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input
+                            type="text"
+                            className="form-input"
+                            style={{ textTransform: 'uppercase', fontFamily: 'monospace' }}
+                            value={couponCodeInput}
+                            onChange={(e) => setCouponCodeInput(e.target.value)}
+                            placeholder="Ex: BOASVINDAS10"
+                          />
+                          <button 
+                            type="button" 
+                            className="copy-btn" 
+                            style={{ margin: 0, padding: '0 16px', fontSize: '13px' }}
+                            onClick={handleApplyCoupon}
+                          >
+                            Aplicar
+                          </button>
+                        </div>
+                      </div>
+
+                      {couponFeedback && (
+                        <div className={`payment-status-banner ${couponFeedback.success ? 'approved' : 'pending'}`} style={{ fontSize: '13px', marginTop: '10px' }}>
+                          {couponFeedback.message}
+                        </div>
+                      )}
+
+                      <button type="submit" className="submit-btn" style={{ marginTop: '16px' }} disabled={pixLoading}>
+                        {pixLoading ? 'Gerando QR Code...' : 'Gerar QR Code Pix'}
+                      </button>
+                    </form>
+
+                    {pixFeedback && (
+                      <div className="payment-status-banner pending" style={{ marginTop: '20px' }}>
+                        {pixFeedback.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Direct coupon redemption card */}
+              <div className="panel-card" style={{ margin: 0 }}>
+                <div className="panel-header secondary">
+                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>🎁</div>
+                  <div className="panel-header-info">
+                    <h2>Resgatar Saldo Grátis</h2>
+                    <p>Tem um código promocional de resgate de saldo? Utilize-o aqui.</p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleRedeemDirectCoupon} style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '16px' }}>
                   <div className="form-group">
-                    <label className="form-label">Valor da Recarga (BRL)</label>
+                    <label className="form-label">Código do Cupom</label>
                     <input
-                      type="number"
+                      type="text"
                       className="form-input"
-                      style={{ fontSize: '18px', fontWeight: 'bold' }}
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      placeholder="Min: R$ 1,00"
-                      min="1.00"
-                      step="0.01"
+                      style={{ fontSize: '16px', fontWeight: 'bold', textTransform: 'uppercase', fontFamily: 'monospace' }}
+                      value={directCouponInput}
+                      onChange={(e) => setDirectCouponInput(e.target.value)}
+                      placeholder="Ex: GRATIS5"
                       required
                     />
                   </div>
-                  <button type="submit" className="submit-btn" disabled={pixLoading}>
-                    {pixLoading ? 'Gerando QR Code...' : 'Gerar QR Code Pix'}
+
+                  {directCouponFeedback && (
+                    <div className={`payment-status-banner ${directCouponFeedback.success ? 'approved' : 'pending'}`} style={{ fontSize: '13px', justifyContent: 'center' }}>
+                      {directCouponFeedback.message}
+                    </div>
+                  )}
+
+                  <button type="submit" className="submit-btn" style={{ background: 'linear-gradient(135deg, var(--primary) 0%, #512da8 100%)', boxShadow: '0 4px 15px rgba(108, 37, 226, 0.2)' }} disabled={isRedeemingDirect}>
+                    {isRedeemingDirect ? 'Processando Resgate...' : 'Resgatar Saldo Grátis'}
                   </button>
                 </form>
-
-                {pixFeedback && (
-                  <div className="payment-status-banner pending" style={{ marginTop: '20px' }}>
-                    {pixFeedback.message}
-                  </div>
-                )}
               </div>
+            </div>
 
-              {/* QR Code / Copia e Cola Display */}
+            {/* QR Code / Copia e Cola Display */}
               {generatedPix && (
                 <div className="pix-qr-box">
                   <p style={{ fontWeight: 'bold', fontSize: '15px' }}>Escaneie para pagar:</p>
@@ -1243,8 +1502,6 @@ export default function Dashboard() {
                   )}
                 </div>
               )}
-            </div>
-          </div>
 
           <div className="panel-card" style={{ marginTop: '24px' }}>
             <div className="panel-header secondary">
@@ -1880,6 +2137,157 @@ export default function Dashboard() {
                   Exibindo os primeiros 50 serviços de {filteredAdminServices.length}. Use a busca ou filtros para refinar.
                 </p>
               )}
+            </div>
+
+            {/* Coupons Management Card */}
+            <div className="panel-card" style={{ marginTop: '24px' }}>
+              <div className="panel-header secondary">
+                <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>🎁</div>
+                <div className="panel-header-info">
+                  <h2>Gerenciamento de Cupons de Desconto</h2>
+                  <p>Crie cupons promocionais para bônus de recarga Pix ou resgate de saldo grátis</p>
+                </div>
+              </div>
+
+              {adminFeedback && adminFeedback.message.includes('cupom') && (
+                <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px' }}>
+                  {adminFeedback.message}
+                </div>
+              )}
+
+              <div className="content-split" style={{ marginTop: '20px', gap: '20px' }}>
+                {/* Form to create coupon */}
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '14px' }}>Criar Novo Cupom</h3>
+                  <form onSubmit={handleCreateCoupon} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div className="form-group">
+                        <label className="form-label">Código</label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          style={{ textTransform: 'uppercase', fontFamily: 'monospace' }}
+                          value={createCouponCode}
+                          onChange={(e) => setCreateCouponCode(e.target.value)}
+                          placeholder="Ex: NOVO10"
+                          required
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Tipo de Desconto</label>
+                        <select
+                          className="form-select"
+                          value={createCouponType}
+                          onChange={(e) => setCreateCouponType(e.target.value as any)}
+                          required
+                        >
+                          <option value="percentage">Percentual (%)</option>
+                          <option value="fixed">Fixo (R$)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                      <div className="form-group">
+                        <label className="form-label">Valor Bônus</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          value={createCouponValue}
+                          onChange={(e) => setCreateCouponValue(e.target.value)}
+                          placeholder="Ex: 10 ou 5.00"
+                          step="0.01"
+                          required
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Dep. Mínimo (R$)</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          value={createCouponMinDeposit}
+                          onChange={(e) => setCreateCouponMinDeposit(e.target.value)}
+                          placeholder="Ex: 50.00"
+                          step="0.01"
+                          required
+                        />
+                        <small style={{ color: 'var(--text-secondary)', fontSize: '9px' }}>Use 0.00 para saldo grátis</small>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Limite Usos</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          value={createCouponMaxUses}
+                          onChange={(e) => setCreateCouponMaxUses(e.target.value)}
+                          placeholder="Ilimitado"
+                          min="1"
+                        />
+                      </div>
+                    </div>
+
+                    <button type="submit" className="submit-btn" style={{ marginTop: '6px' }} disabled={isCreatingCoupon}>
+                      {isCreatingCoupon ? 'Criando Cupom...' : 'Criar Cupom'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* List of existing coupons */}
+                <div style={{ flex: 1.5 }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '14px' }}>Cupons Cadastrados</h3>
+                  {adminCouponsLoading ? (
+                    <p style={{ color: 'var(--text-secondary)' }}>Buscando cupons...</p>
+                  ) : (
+                    <div className="services-table-wrapper" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                      <table className="smm-table">
+                        <thead>
+                          <tr>
+                            <th>Código</th>
+                            <th>Tipo</th>
+                            <th>Bônus</th>
+                            <th>Mínimo</th>
+                            <th>Usos</th>
+                            <th style={{ textAlign: 'center' }}>Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminCoupons.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '16px' }}>
+                                Nenhum cupom cadastrado.
+                              </td>
+                            </tr>
+                          ) : (
+                            adminCoupons.map((cp) => (
+                              <tr key={cp.code}>
+                                <td style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{cp.code}</td>
+                                <td>{cp.type === 'percentage' ? 'Percentual' : 'Fixo'}</td>
+                                <td style={{ fontWeight: 'bold', color: 'var(--success)' }}>
+                                  {cp.type === 'percentage' ? `${cp.value}%` : `R$ ${cp.value.toFixed(2)}`}
+                                </td>
+                                <td>R$ {cp.minDeposit.toFixed(2)}</td>
+                                <td style={{ fontSize: '12px' }}>
+                                  {cp.usedCount} / {cp.maxUses || 'Ilimitado'}
+                                </td>
+                                <td style={{ textAlign: 'center' }}>
+                                  <button
+                                    type="button"
+                                    className="delete-user-btn"
+                                    style={{ margin: 0, padding: '4px 8px', fontSize: '11px' }}
+                                    onClick={() => handleDeleteCoupon(cp.code)}
+                                  >
+                                    Excluir
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}

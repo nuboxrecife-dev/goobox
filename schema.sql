@@ -77,3 +77,39 @@ CREATE POLICY "Allow all to service_role" ON settings USING (true) WITH CHECK (t
 -- Migration statement for already initialized databases
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user' NOT NULL;
 
+-- 6. Create COUPONS table
+CREATE TABLE IF NOT EXISTS coupons (
+    code VARCHAR(50) PRIMARY KEY,
+    type VARCHAR(20) NOT NULL, -- 'percentage' or 'fixed'
+    value DECIMAL(15, 2) NOT NULL,
+    min_deposit DECIMAL(15, 2) DEFAULT 0.00,
+    max_uses INTEGER,
+    used_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 7. Create COUPON_USES table to prevent duplicate redemptions
+CREATE TABLE IF NOT EXISTS coupon_uses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    coupon_code VARCHAR(50) REFERENCES coupons(code) ON DELETE CASCADE,
+    user_email VARCHAR(255) NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 8. Create PAYMENT_COUPONS table to temporarily link coupons to pending pix payments
+CREATE TABLE IF NOT EXISTS payment_coupons (
+    payment_id VARCHAR(100) PRIMARY KEY,
+    coupon_code VARCHAR(50) REFERENCES coupons(code) ON DELETE CASCADE,
+    bonus_amount DECIMAL(15, 2) NOT NULL
+);
+
+-- Enable RLS and add policies
+ALTER TABLE coupons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coupon_uses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_coupons ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all to service_role" ON coupons USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON coupon_uses USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON payment_coupons USING (true) WITH CHECK (true);
+

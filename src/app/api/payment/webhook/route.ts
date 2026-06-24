@@ -64,6 +64,20 @@ export async function POST(request: Request) {
       const updated = await dbHelper.updatePaymentStatus(paymentId, 'approved');
       if (updated) {
         console.log(`Pagamento ${paymentId} APROVADO. Saldo atualizado com sucesso!`);
+        
+        // Apply coupon bonus if associated with this payment
+        const email = updated.userEmail || 'admin@goobox.com';
+        try {
+          const paymentCoupon = await dbHelper.getPaymentCoupon(paymentId);
+          if (paymentCoupon) {
+            console.log(`Bônus de cupom encontrado para pagamento ${paymentId}: Código: ${paymentCoupon.couponCode}, Valor: R$ ${paymentCoupon.bonusAmount}`);
+            await dbHelper.updateUserBalance(email, paymentCoupon.bonusAmount);
+            await dbHelper.registerCouponUse(paymentCoupon.couponCode, email);
+          }
+        } catch (couponErr) {
+          console.error('Error applying coupon bonus on payment approval:', couponErr);
+        }
+
         return NextResponse.json({ 
           success: true, 
           message: 'Pagamento processado e saldo creditado.', 

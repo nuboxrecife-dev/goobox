@@ -49,12 +49,39 @@ export interface Payment {
   userEmail?: string;
 }
 
+export interface Coupon {
+  code: string;
+  type: 'percentage' | 'fixed';
+  value: number;
+  minDeposit: number;
+  maxUses?: number | null;
+  usedCount: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface CouponUse {
+  id?: string;
+  couponCode: string;
+  userEmail: string;
+  usedAt?: string;
+}
+
+export interface PaymentCoupon {
+  paymentId: string;
+  couponCode: string;
+  bonusAmount: number;
+}
+
 interface DatabaseSchema {
   user: UserStats;
   services: Service[];
   orders: Order[];
   payments: Payment[];
   usersList?: UserStats[];
+  coupons?: Coupon[];
+  couponUses?: CouponUse[];
+  paymentCoupons?: PaymentCoupon[];
 }
 
 const DEFAULT_SERVICES: Service[] = [
@@ -91,7 +118,29 @@ const INITIAL_DB: DatabaseSchema = {
   usersList: [],
   services: DEFAULT_SERVICES,
   orders: [],
-  payments: []
+  payments: [],
+  coupons: [
+    {
+      code: 'BOASVINDAS10',
+      type: 'percentage',
+      value: 10.00,
+      minDeposit: 30.00,
+      maxUses: 100,
+      usedCount: 0,
+      isActive: true
+    },
+    {
+      code: 'GRATIS5',
+      type: 'fixed',
+      value: 5.00,
+      minDeposit: 0.00,
+      maxUses: 200,
+      usedCount: 0,
+      isActive: true
+    }
+  ],
+  couponUses: [],
+  paymentCoupons: []
 };
 
 // JSON Local Fallback Helpers
@@ -910,5 +959,278 @@ export const dbHelper = {
       console.error('syncServicesFromSupplier failed:', err);
       return [];
     }
+  },
+
+  getCoupons: async (): Promise<Coupon[]> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('coupons')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return (data || []).map(c => ({
+          code: c.code,
+          type: c.type,
+          value: parseFloat(c.value),
+          minDeposit: parseFloat(c.min_deposit),
+          maxUses: c.max_uses,
+          usedCount: c.used_count,
+          isActive: c.is_active,
+          createdAt: c.created_at
+        }));
+      } catch (err) {
+        console.error('Supabase getCoupons failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    return db.coupons || [];
+  },
+
+  createCoupon: async (coupon: Coupon): Promise<Coupon> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('coupons')
+          .insert({
+            code: coupon.code.toUpperCase(),
+            type: coupon.type,
+            value: coupon.value,
+            min_deposit: coupon.minDeposit,
+            max_uses: coupon.maxUses,
+            used_count: 0,
+            is_active: true
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        return {
+          code: data.code,
+          type: data.type,
+          value: parseFloat(data.value),
+          minDeposit: parseFloat(data.min_deposit),
+          maxUses: data.max_uses,
+          usedCount: data.used_count,
+          isActive: data.is_active,
+          createdAt: data.created_at
+        };
+      } catch (err) {
+        console.error('Supabase createCoupon failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    if (!db.coupons) db.coupons = [];
+    const newCoupon: Coupon = {
+      ...coupon,
+      code: coupon.code.toUpperCase(),
+      usedCount: 0,
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
+    db.coupons.push(newCoupon);
+    saveLocalDb(db);
+    return newCoupon;
+  },
+
+  deleteCoupon: async (code: string): Promise<boolean> => {
+    const cleanCode = code.toUpperCase();
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('coupons')
+          .delete()
+          .eq('code', cleanCode);
+
+        if (error) throw error;
+        return true;
+      } catch (err) {
+        console.error('Supabase deleteCoupon failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    let changed = false;
+    if (db.coupons) {
+      const originalLength = db.coupons.length;
+      db.coupons = db.coupons.filter(c => c.code !== cleanCode);
+      if (db.coupons.length !== originalLength) {
+        changed = true;
+      }
+    }
+    if (db.couponUses) {
+      const originalLength = db.couponUses.length;
+      db.couponUses = db.couponUses.filter(u => u.couponCode !== cleanCode);
+      if (db.couponUses.length !== originalLength) {
+        changed = true;
+      }
+    }
+    if (db.paymentCoupons) {
+      const originalLength = db.paymentCoupons.length;
+      db.paymentCoupons = db.paymentCoupons.filter(pc => pc.couponCode !== cleanCode);
+      if (db.paymentCoupons.length !== originalLength) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveLocalDb(db);
+      return true;
+    }
+    return false;
+  },
+
+  getCouponByCode: async (code: string): Promise<Coupon | null> => {
+    const cleanCode = code.toUpperCase();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('coupons')
+          .select('*')
+          .eq('code', cleanCode)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (data) {
+          return {
+            code: data.code,
+            type: data.type,
+            value: parseFloat(data.value),
+            minDeposit: parseFloat(data.min_deposit),
+            maxUses: data.max_uses,
+            usedCount: data.used_count,
+            isActive: data.is_active,
+            createdAt: data.created_at
+          };
+        }
+        return null;
+      } catch (err) {
+        console.error('Supabase getCouponByCode failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    const found = (db.coupons || []).find(c => c.code === cleanCode);
+    return found || null;
+  },
+
+  checkCouponUse: async (code: string, email: string): Promise<boolean> => {
+    const cleanCode = code.toUpperCase();
+    const cleanEmail = email.toLowerCase();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('coupon_uses')
+          .select('id')
+          .eq('coupon_code', cleanCode)
+          .eq('user_email', cleanEmail)
+          .maybeSingle();
+
+        if (error) throw error;
+        return !!data;
+      } catch (err) {
+        console.error('Supabase checkCouponUse failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    const uses = db.couponUses || [];
+    return uses.some(u => u.couponCode === cleanCode && u.userEmail === cleanEmail);
+  },
+
+  registerCouponUse: async (code: string, email: string): Promise<void> => {
+    const cleanCode = code.toUpperCase();
+    const cleanEmail = email.toLowerCase();
+    if (supabase) {
+      try {
+        const { error: insertErr } = await supabase
+          .from('coupon_uses')
+          .insert({
+            coupon_code: cleanCode,
+            user_email: cleanEmail
+          });
+
+        if (insertErr) throw insertErr;
+
+        const coupon = await dbHelper.getCouponByCode(cleanCode);
+        if (coupon) {
+          await supabase
+            .from('coupons')
+            .update({ used_count: coupon.usedCount + 1 })
+            .eq('code', cleanCode);
+        }
+        return;
+      } catch (err) {
+        console.error('Supabase registerCouponUse failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    if (!db.couponUses) db.couponUses = [];
+    db.couponUses.push({
+      couponCode: cleanCode,
+      userEmail: cleanEmail,
+      usedAt: new Date().toISOString()
+    });
+
+    if (db.coupons) {
+      const couponIdx = db.coupons.findIndex(c => c.code === cleanCode);
+      if (couponIdx !== -1) {
+        db.coupons[couponIdx].usedCount += 1;
+      }
+    }
+    saveLocalDb(db);
+  },
+
+  savePaymentCoupon: async (paymentId: string, code: string, bonusAmount: number): Promise<void> => {
+    const cleanCode = code.toUpperCase();
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('payment_coupons')
+          .insert({
+            payment_id: paymentId,
+            coupon_code: cleanCode,
+            bonus_amount: bonusAmount
+          });
+
+        if (error) throw error;
+        return;
+      } catch (err) {
+        console.error('Supabase savePaymentCoupon failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    if (!db.paymentCoupons) db.paymentCoupons = [];
+    db.paymentCoupons = db.paymentCoupons.filter(pc => pc.paymentId !== paymentId);
+    db.paymentCoupons.push({
+      paymentId,
+      couponCode: cleanCode,
+      bonusAmount
+    });
+    saveLocalDb(db);
+  },
+
+  getPaymentCoupon: async (paymentId: string): Promise<PaymentCoupon | null> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('payment_coupons')
+          .select('*')
+          .eq('payment_id', paymentId)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (data) {
+          return {
+            paymentId: data.payment_id,
+            couponCode: data.coupon_code,
+            bonusAmount: parseFloat(data.bonus_amount)
+          };
+        }
+        return null;
+      } catch (err) {
+        console.error('Supabase getPaymentCoupon failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    const found = (db.paymentCoupons || []).find(pc => pc.paymentId === paymentId);
+    return found || null;
   }
 };

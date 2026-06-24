@@ -3,13 +3,38 @@ import { dbHelper, Payment } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
-    const { amount, userEmail } = await request.json();
+    const { amount, userEmail, couponCode } = await request.json();
 
     if (!amount || amount <= 0) {
       return NextResponse.json(
         { error: 'Valor inválido. Insira um valor maior que zero.' },
         { status: 400 }
       );
+    }
+
+    // Validate coupon if provided
+    let bonusAmount = 0;
+    let validatedCoupon = null;
+
+    if (couponCode && userEmail) {
+      try {
+        const coupon = await dbHelper.getCouponByCode(couponCode);
+        if (coupon && coupon.isActive && parseFloat(amount) >= coupon.minDeposit) {
+          const alreadyUsed = await dbHelper.checkCouponUse(couponCode, userEmail);
+          const underLimit = !coupon.maxUses || coupon.usedCount < coupon.maxUses;
+
+          if (!alreadyUsed && underLimit) {
+            validatedCoupon = coupon;
+            if (coupon.type === 'percentage') {
+              bonusAmount = parseFloat((parseFloat(amount) * (coupon.value / 100)).toFixed(2));
+            } else {
+              bonusAmount = coupon.value;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error validating coupon for pix payment:', err);
+      }
     }
 
     const paymentId = Math.floor(1000000000 + Math.random() * 9000000000).toString();
@@ -105,6 +130,11 @@ export async function POST(request: Request) {
 
     // Save payment to database AFTER we have resolved the final ID (mock or real)
     await dbHelper.addPayment(newPayment);
+
+    // Save coupon association if applied
+    if (validatedCoupon && bonusAmount > 0) {
+      await dbHelper.savePaymentCoupon(newPayment.id, validatedCoupon.code, bonusAmount);
+    }
 
     return NextResponse.json({
       success: true,
