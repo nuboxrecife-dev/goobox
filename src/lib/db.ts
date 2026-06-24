@@ -214,39 +214,46 @@ export const dbHelper = {
   },
 
   getUser: async (email?: string): Promise<UserStats> => {
-    if (email) {
-      const u = await dbHelper.getUserByEmail(email);
-      if (u) return u;
-    }
+    const targetEmail = email || 'admin@goobox.com';
+    let u = await dbHelper.getUserByEmail(targetEmail);
     
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('*')
-          .limit(1)
-          .maybeSingle();
+    if (!u) {
+      // Auto-register simulated users in the database so they exist in Supabase
+      const isElite = targetEmail.toLowerCase() === 'admin@goobox.com';
+      const displayName = targetEmail.split('@')[0].charAt(0).toUpperCase() + targetEmail.split('@')[0].slice(1);
+      
+      u = await dbHelper.createUser({
+        name: displayName,
+        email: targetEmail,
+        passwordHash: '',
+        balance: 50.00
+      });
 
-        if (error) throw error;
-        if (data) {
-          return {
-            id: data.id,
-            name: data.name,
-            email: data.email,
-            balance: parseFloat(data.balance),
-            totalOrders: data.total_orders,
-            totalSpent: parseFloat(data.total_spent),
-            status: data.status,
-            role: data.role
-          };
+      if (isElite) {
+        u.balance = 1000.00; // Give default admin R$ 1000.00 to test SMM orders
+        u.status = 'Elite';
+        u.totalOrders = 1475;
+        u.totalSpent = 412.50;
+        
+        if (supabase) {
+          try {
+            await supabase
+              .from('users')
+              .update({
+                balance: u.balance,
+                status: u.status,
+                total_orders: u.totalOrders,
+                total_spent: u.totalSpent
+              })
+              .eq('email', targetEmail);
+          } catch (err) {
+            console.error('Failed to update admin initial balance in Supabase:', err);
+          }
         }
-      } catch (err) {
-        console.error('Supabase user fetch failed, using local DB:', err);
       }
     }
-
-    const localUser = getLocalDb().user;
-    return { ...localUser, role: localUser.role || 'admin' };
+    
+    return u;
   },
 
   updateUserBalance: async (email: string, amount: number): Promise<void> => {
