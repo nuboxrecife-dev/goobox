@@ -59,6 +59,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<UserStats | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Form states for New Order
@@ -79,6 +80,7 @@ export default function Dashboard() {
   // Admin Panel states
   const [adminUsers, setAdminUsers] = useState<UserStats[]>([]);
   const [markupPercent, setMarkupPercent] = useState<number>(20);
+  const [whatsappNumber, setWhatsappNumber] = useState<string>('5511999999999');
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminFeedback, setAdminFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [adjustingUserEmail, setAdjustingUserEmail] = useState('');
@@ -109,15 +111,19 @@ export default function Dashboard() {
       const sessionUser = sessionUserStr ? JSON.parse(sessionUserStr) : null;
       const emailParam = sessionUser?.email ? `?email=${encodeURIComponent(sessionUser.email)}` : '';
 
-      const [userRes, servicesRes, ordersRes] = await Promise.all([
+      const [userRes, servicesRes, ordersRes, paymentsRes, settingsRes] = await Promise.all([
         fetch(`/api/user${emailParam}`),
         fetch('/api/services'),
-        fetch(`/api/orders${emailParam}`)
+        fetch(`/api/orders${emailParam}`),
+        fetch(`/api/payment${emailParam}`),
+        fetch('/api/admin/settings')
       ]);
 
       const userData = await userRes.json();
       const servicesData = await servicesRes.json();
       const ordersData = await ordersRes.json();
+      const paymentsData = await paymentsRes.json();
+      const settingsData = await settingsRes.json();
 
       // Merge current active session details if customized
       if (sessionUser) {
@@ -134,6 +140,13 @@ export default function Dashboard() {
       
       setServices(servicesData);
       setOrders(ordersData);
+      setPayments(paymentsData || []);
+      if (settingsData && settingsData.supportWhatsappNumber) {
+        setWhatsappNumber(settingsData.supportWhatsappNumber);
+      }
+      if (settingsData && settingsData.serviceMarkupPercent !== undefined) {
+        setMarkupPercent(settingsData.serviceMarkupPercent);
+      }
 
       if (servicesData.length > 0) {
         const categories = Array.from(new Set(servicesData.map((s: Service) => s.category))) as string[];
@@ -157,6 +170,9 @@ export default function Dashboard() {
         const settingsData = await settingsRes.json();
         setAdminUsers(usersData);
         setMarkupPercent(settingsData.serviceMarkupPercent);
+        if (settingsData.supportWhatsappNumber) {
+          setWhatsappNumber(settingsData.supportWhatsappNumber);
+        }
       }
     } catch (err) {
       console.error('Erro ao buscar dados do admin:', err);
@@ -171,7 +187,7 @@ export default function Dashboard() {
     }
   }, [activeTab, user]);
 
-  const handleUpdateMarkup = async (e: React.FormEvent) => {
+  const handleUpdateSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminFeedback(null);
     setIsSavingMarkup(true);
@@ -179,14 +195,17 @@ export default function Dashboard() {
       const res = await fetch('/api/admin/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serviceMarkupPercent: markupPercent })
+        body: JSON.stringify({ 
+          serviceMarkupPercent: markupPercent,
+          supportWhatsappNumber: whatsappNumber
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        setAdminFeedback({ success: true, message: 'Margem de lucro atualizada!' });
+        setAdminFeedback({ success: true, message: 'Configurações atualizadas com sucesso!' });
         fetchData();
       } else {
-        setAdminFeedback({ success: false, message: data.error || 'Erro ao atualizar margem.' });
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao atualizar configurações.' });
       }
     } catch (err) {
       console.error(err);
@@ -407,6 +426,7 @@ export default function Dashboard() {
       }
 
       setGeneratedPix(data.payment);
+      fetchData();
     } catch (err) {
       console.error(err);
       setPixFeedback({ success: false, message: 'Erro de conexão ao gerar pagamento.' });
@@ -675,7 +695,7 @@ export default function Dashboard() {
           </ul>
         </div>
 
-        <div className="whatsapp-float" title="Suporte WhatsApp" onClick={() => window.open('https://wa.me/5511999999999', '_blank')}>
+        <div className="whatsapp-float" title="Suporte WhatsApp" onClick={() => window.open(`https://wa.me/${whatsappNumber}`, '_blank')}>
           <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24" style={{ color: 'white' }}>
             <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.516 2.266 2.27 3.507 5.286 3.505 8.492-.005 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.731-1.456L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.42 9.864-9.858.002-2.634-1.023-5.11-2.887-6.978-1.864-1.868-4.343-2.899-6.984-2.9-5.439 0-9.865 4.422-9.869 9.86-.001 1.768.482 3.49 1.398 5.018l-.998 3.645 3.738-.981.014.009L6.647 19.15z"/>
           </svg>
@@ -929,7 +949,8 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'adicionar-saldo' && (
-          <div className="panel-card">
+          <>
+            <div className="panel-card">
             <div className="panel-header">
               <div className="panel-header-icon">💸</div>
               <div className="panel-header-info">
@@ -1013,6 +1034,56 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+
+          <div className="panel-card" style={{ marginTop: '24px' }}>
+            <div className="panel-header secondary">
+              <div className="panel-header-icon">🧾</div>
+              <div className="panel-header-info">
+                <h2>Histórico de Depósitos</h2>
+                <p>Veja o status de todas as suas tentativas de recarga Pix</p>
+              </div>
+            </div>
+
+            <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+              <table className="smm-table">
+                <thead>
+                  <tr>
+                    <th>ID da Transação</th>
+                    <th>Valor</th>
+                    <th>Status</th>
+                    <th>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                        Nenhum depósito iniciado ainda.
+                      </td>
+                    </tr>
+                  ) : (
+                    payments.map((pay) => (
+                      <tr key={pay.id}>
+                        <td style={{ fontFamily: 'monospace', fontSize: '13px' }}>#{pay.id}</td>
+                        <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
+                          R$ {pay.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td>
+                          <span className={`badge ${pay.status === 'approved' ? 'success' : pay.status === 'rejected' ? 'error' : 'processing'}`}>
+                            {pay.status === 'approved' ? 'Aprovado' : pay.status === 'rejected' ? 'Recusado' : 'Pendente'}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          {new Date(pay.createdAt).toLocaleString('pt-BR')}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          </>
         )}
 
         {activeTab === 'pedidos' && (
@@ -1132,23 +1203,23 @@ export default function Dashboard() {
         {activeTab === 'admin' && user?.role === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div className="content-split">
-              {/* Markup settings card */}
+              {/* Global settings card */}
               <div className="panel-card">
                 <div className="panel-header">
-                  <div className="panel-header-icon">📈</div>
+                  <div className="panel-header-icon">⚙️</div>
                   <div className="panel-header-info">
-                    <h2>Margem de Lucro dos Serviços</h2>
-                    <p>Defina a porcentagem de lucro cobrada acima do fornecedor</p>
+                    <h2>Configurações do Painel</h2>
+                    <p>Defina o markup de lucro e informações de contato do suporte</p>
                   </div>
                 </div>
 
-                {adminFeedback && adminFeedback.message.includes('Margem') && (
+                {adminFeedback && (adminFeedback.message.includes('Configurações') || adminFeedback.message.includes('lucro') || adminFeedback.message.includes('WhatsApp') || adminFeedback.message.includes('margem')) && (
                   <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
                     {adminFeedback.message}
                   </div>
                 )}
 
-                <form onSubmit={handleUpdateMarkup}>
+                <form onSubmit={handleUpdateSettings}>
                   <div className="form-group">
                     <label className="form-label">Markup Global (%)</label>
                     <input
@@ -1166,8 +1237,25 @@ export default function Dashboard() {
                       Exemplo: 20% de markup transformará um custo de fornecedor de R$ 5,00 em R$ 6,00 para os clientes.
                     </small>
                   </div>
-                  <button type="submit" className="submit-btn" disabled={isSavingMarkup}>
-                    {isSavingMarkup ? 'Salvando...' : 'Salvar Margem de Lucro'}
+
+                  <div className="form-group" style={{ marginTop: '16px' }}>
+                    <label className="form-label">WhatsApp de Suporte (DDI + DDD + Número)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ fontSize: '18px', fontWeight: 'bold', fontFamily: 'monospace' }}
+                      value={whatsappNumber}
+                      onChange={(e) => setWhatsappNumber(e.target.value)}
+                      placeholder="Ex: 5511999999999"
+                      required
+                    />
+                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Insira o número completo com DDI (55 para Brasil) e DDD, sem espaços ou traços.
+                    </small>
+                  </div>
+
+                  <button type="submit" className="submit-btn" style={{ marginTop: '16px' }} disabled={isSavingMarkup}>
+                    {isSavingMarkup ? 'Salvando...' : 'Salvar Configurações'}
                   </button>
                 </form>
               </div>

@@ -5,7 +5,9 @@ const vars = [
   { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", val: "sb_publishable_aDewurK1M9hG_udDmmDyHQ_BHMQj6nb" },
   { name: "SUPABASE_SERVICE_ROLE_KEY", val: "sb_publishable_aDewurK1M9hG_udDmmDyHQ_BHMQj6nb" },
   { name: "SUPPLIER_API_URL", val: "https://smmpainel.com/api/v2" },
-  { name: "SUPPLIER_API_KEY", val: "d8bfae98c28440aa77873ef4d109d52a" }
+  { name: "SUPPLIER_API_KEY", val: "d8bfae98c28440aa77873ef4d109d52a" },
+  { name: "MERCADO_PAGO_ACCESS_TOKEN", val: "APP_USR-3544440191991998-052718-95b832b94d37b9b132d8c76fe3a6828e-1237067526" },
+  { name: "MERCADO_PAGO_PUBLIC_KEY", val: "APP_USR-a1f22d44-4b82-4ada-b476-781e414db98b" }
 ];
 
 for (const item of vars) {
