@@ -104,11 +104,7 @@ export async function POST(request: Request) {
             payer: {
               email: userEmail || 'cliente@goobox.com',
               first_name: 'Cliente',
-              last_name: 'SMM',
-              identification: {
-                type: 'CPF',
-                number: '12345678909'
-              }
+              last_name: 'SMM'
             }
           })
         });

@@ -504,6 +504,28 @@ export default function Dashboard() {
     }
   }, [isAuthenticated]);
 
+  // Poll for payments list when generatedPix is pending
+  useEffect(() => {
+    if (!generatedPix || generatedPix.status !== 'pending' || !isAuthenticated) return;
+
+    const interval = setInterval(() => {
+      fetchData();
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [generatedPix, isAuthenticated]);
+
+  // Auto-approve generatedPix banner when payment status updates to approved in list
+  useEffect(() => {
+    if (generatedPix && generatedPix.status === 'pending') {
+      const foundPayment = payments.find((p: any) => p.id === generatedPix.id);
+      if (foundPayment && foundPayment.status === 'approved') {
+        setGeneratedPix(foundPayment);
+        setPixFeedback({ success: true, message: 'Pagamento aprovado e creditado!' });
+      }
+    }
+  }, [payments, generatedPix]);
+
   // Update selected service when category or search changes
   useEffect(() => {
     if (services.length > 0 && selectedCategory) {
