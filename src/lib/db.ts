@@ -73,6 +73,13 @@ export interface PaymentCoupon {
   bonusAmount: number;
 }
 
+export interface ResetToken {
+  email: string;
+  tokenHash: string; // SHA-256 hash of the OTP code
+  expiresAt: string; // ISO timestamp
+  used: boolean;
+}
+
 interface DatabaseSchema {
   user: UserStats;
   services: Service[];
@@ -82,6 +89,7 @@ interface DatabaseSchema {
   coupons?: Coupon[];
   couponUses?: CouponUse[];
   paymentCoupons?: PaymentCoupon[];
+  resetTokens?: ResetToken[];
 }
 
 const DEFAULT_SERVICES: Service[] = [
@@ -1296,5 +1304,39 @@ export const dbHelper = {
     const db = getLocalDb();
     const found = (db.paymentCoupons || []).find(pc => pc.paymentId === paymentId);
     return found || null;
+  },
+
+  // ─── OTP Reset Token Management ──────────────────────────────────────────────
+
+  saveResetToken: async (email: string, tokenHash: string, expiresAt: string): Promise<void> => {
+    const db = getLocalDb();
+    if (!db.resetTokens) db.resetTokens = [];
+    // Remove any existing token for this email
+    db.resetTokens = db.resetTokens.filter(t => t.email.toLowerCase() !== email.toLowerCase());
+    // Add new token
+    db.resetTokens.push({ email: email.toLowerCase(), tokenHash, expiresAt, used: false });
+    saveLocalDb(db);
+  },
+
+  getResetToken: async (email: string): Promise<ResetToken | null> => {
+    const db = getLocalDb();
+    const token = (db.resetTokens || []).find(
+      t => t.email.toLowerCase() === email.toLowerCase() && !t.used
+    );
+    if (!token) return null;
+    // Check expiration
+    if (new Date(token.expiresAt) < new Date()) return null;
+    return token;
+  },
+
+  invalidateResetToken: async (email: string): Promise<void> => {
+    const db = getLocalDb();
+    if (!db.resetTokens) return;
+    const token = db.resetTokens.find(t => t.email.toLowerCase() === email.toLowerCase());
+    if (token) {
+      token.used = true;
+      saveLocalDb(db);
+    }
   }
 };
+

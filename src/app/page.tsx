@@ -68,9 +68,15 @@ export default function Dashboard() {
 
   // Recovery Form states
   const [recoveryEmail, setRecoveryEmail] = useState('');
-  const [recoveryStep, setRecoveryStep] = useState<'email' | 'reset'>('email');
+  const [recoveryStep, setRecoveryStep] = useState<'email' | 'code' | 'reset'>('email');
+  const [recoveryCode, setRecoveryCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [otpCountdown, setOtpCountdown] = useState(0);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpResetting, setOtpResetting] = useState(false);
 
   const [isMobile, setIsMobile] = useState(false);
 
@@ -183,6 +189,17 @@ export default function Dashboard() {
     window.addEventListener('resize', checkSize);
     return () => window.removeEventListener('resize', checkSize);
   }, []);
+
+  // OTP Countdown timer
+  useEffect(() => {
+    if (otpCountdown <= 0 && resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpCountdown(prev => Math.max(0, prev - 1));
+      setResendCooldown(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpCountdown, resendCooldown]);
+
 
   // Fetch initial SMM data after auth
   const fetchData = async () => {
@@ -635,25 +652,61 @@ export default function Dashboard() {
       return;
     }
 
+    // ── STEP 1: Request OTP ──────────────────────────────────────────────
     if (recoveryStep === 'email') {
+      setOtpSending(true);
       try {
         const res = await fetch('/api/auth/recover', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: recoveryEmail })
+          body: JSON.stringify({ step: 'request', email: recoveryEmail })
         });
         const data = await res.json();
         if (!res.ok) {
-          setAuthFeedback(data.error || 'Erro ao verificar e-mail.');
+          setAuthFeedback(data.error || 'Erro ao enviar o código.');
+          return;
+        }
+        setRecoveryStep('code');
+        setAuthFeedback(null);
+        // Start OTP 15-minute countdown
+        setOtpCountdown(900);
+        setResendCooldown(60);
+      } catch (err) {
+        console.error(err);
+        setAuthFeedback('Erro de conexão. Tente novamente.');
+      } finally {
+        setOtpSending(false);
+      }
+
+    // ── STEP 2: Verify OTP ───────────────────────────────────────────────
+    } else if (recoveryStep === 'code') {
+      if (!recoveryCode || recoveryCode.length !== 6) {
+        setAuthFeedback('Digite o código de 6 dígitos recebido por e-mail.');
+        return;
+      }
+      setOtpVerifying(true);
+      try {
+        const res = await fetch('/api/auth/recover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ step: 'verify', email: recoveryEmail, code: recoveryCode })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setAuthFeedback(data.error || 'Código inválido.');
           return;
         }
         setRecoveryStep('reset');
         setAuthFeedback(null);
       } catch (err) {
         console.error(err);
-        setAuthFeedback('Erro de conexão ao verificar e-mail.');
+        setAuthFeedback('Erro de conexão. Tente novamente.');
+      } finally {
+        setOtpVerifying(false);
       }
-    } else {
+
+    // ── STEP 3: Reset Password ───────────────────────────────────────────
+    } else if (recoveryStep === 'reset') {
       if (!newPassword || !confirmPassword) {
         setAuthFeedback('Preencha os campos de nova senha.');
         return;
@@ -662,26 +715,36 @@ export default function Dashboard() {
         setAuthFeedback('As senhas não coincidem.');
         return;
       }
+      if (newPassword.length < 6) {
+        setAuthFeedback('A senha deve ter pelo menos 6 caracteres.');
+        return;
+      }
+      setOtpResetting(true);
       try {
         const res = await fetch('/api/auth/recover', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: recoveryEmail, password: newPassword })
+          body: JSON.stringify({ step: 'reset', email: recoveryEmail, code: recoveryCode, password: newPassword })
         });
         const data = await res.json();
         if (!res.ok) {
           setAuthFeedback(data.error || 'Erro ao redefinir a senha.');
           return;
         }
-        setAuthFeedback('Senha redefinida com sucesso! Faça login.');
+        setAuthFeedback('✅ Senha redefinida com sucesso! Faça login.');
         setAuthScreen('login');
         setRecoveryEmail('');
         setRecoveryStep('email');
+        setRecoveryCode('');
         setNewPassword('');
         setConfirmPassword('');
+        setOtpCountdown(0);
+        setResendCooldown(0);
       } catch (err) {
         console.error(err);
         setAuthFeedback('Erro de conexão ao redefinir a senha.');
+      } finally {
+        setOtpResetting(false);
       }
     }
   };
@@ -1051,28 +1114,121 @@ export default function Dashboard() {
 
             {authScreen === 'recover' ? (
               <form onSubmit={handleRecoverySubmit} autoComplete="off">
-                {recoveryStep === 'email' ? (
+                
+                {/* Progress steps */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', justifyContent: 'center' }}>
+                  {[{ label: 'E-mail', step: 'email' }, { label: 'Código', step: 'code' }, { label: 'Nova Senha', step: 'reset' }].map((s, i) => (
+                    <div key={s.step} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{
+                        width: '28px', height: '28px', borderRadius: '50%',
+                        background: recoveryStep === s.step ? 'var(--primary)' :
+                          (i < ['email','code','reset'].indexOf(recoveryStep) ? 'var(--success)' : 'var(--bg-tertiary)'),
+                        border: '2px solid ' + (recoveryStep === s.step ? 'var(--primary)' :
+                          (i < ['email','code','reset'].indexOf(recoveryStep) ? 'var(--success)' : 'var(--border-color)')),
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '12px', fontWeight: 700, color: '#fff', flexShrink: 0
+                      }}>
+                        {i < ['email','code','reset'].indexOf(recoveryStep) ? '✓' : i + 1}
+                      </div>
+                      <span style={{ fontSize: '11px', color: recoveryStep === s.step ? '#fff' : 'var(--text-secondary)', fontWeight: recoveryStep === s.step ? 700 : 400 }}>{s.label}</span>
+                      {i < 2 && <div style={{ width: '20px', height: '1px', background: 'var(--border-color)' }} />}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Step 1: Email */}
+                {recoveryStep === 'email' && (
                   <>
                     <div className="login-input-group">
                       <label className="form-label">E-mail de recuperação</label>
                       <input
                         type="email"
                         className="login-input-field"
-                        placeholder="exemplo@goobox.com"
+                        placeholder="exemplo@email.com"
                         value={recoveryEmail}
                         onChange={(e) => setRecoveryEmail(e.target.value)}
                         required
                         autoComplete="off"
                       />
                     </div>
-                    <button type="submit" className="login-btn-premium">
-                      Verificar E-mail
+                    <button type="submit" className="login-btn-premium" disabled={otpSending}>
+                      {otpSending ? 'Enviando código...' : '📨 Enviar Código de Verificação'}
                     </button>
                   </>
-                ) : (
+                )}
+
+                {/* Step 2: OTP Code */}
+                {recoveryStep === 'code' && (
                   <>
-                    <div style={{ color: '#00bfa5', fontSize: '13px', marginBottom: '16px', fontWeight: 600, textAlign: 'center' }}>
-                      ✓ E-mail verificado! Digite sua nova senha abaixo.
+                    <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>📬</div>
+                      <p style={{ color: '#98a2b3', fontSize: '13px', margin: 0 }}>
+                        Enviamos um código para <strong style={{ color: '#fff' }}>{recoveryEmail}</strong>
+                      </p>
+                      <p style={{ color: '#98a2b3', fontSize: '12px', marginTop: '4px' }}>Verifique também o spam.</p>
+                    </div>
+
+                    <div className="login-input-group">
+                      <label className="form-label">Código de 6 dígitos</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="login-input-field"
+                        placeholder="000000"
+                        maxLength={6}
+                        value={recoveryCode}
+                        onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        required
+                        autoComplete="one-time-code"
+                        style={{ textAlign: 'center', fontSize: '28px', fontWeight: 900, letterSpacing: '12px', fontFamily: 'monospace' }}
+                      />
+                    </div>
+
+                    {otpCountdown > 0 && (
+                      <p style={{ textAlign: 'center', fontSize: '12px', color: otpCountdown < 120 ? '#f87171' : '#98a2b3', marginBottom: '12px' }}>
+                        ⏱️ Expira em {Math.floor(otpCountdown / 60)}:{String(otpCountdown % 60).padStart(2, '0')}
+                      </p>
+                    )}
+
+                    <button type="submit" className="login-btn-premium" disabled={otpVerifying || recoveryCode.length !== 6}>
+                      {otpVerifying ? 'Verificando...' : '✅ Verificar Código'}
+                    </button>
+
+                    <div style={{ textAlign: 'center', marginTop: '12px' }}>
+                      <span
+                        className="login-toggle-link"
+                        style={{ fontSize: '13px', opacity: resendCooldown > 0 ? 0.5 : 1, cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer' }}
+                        onClick={async () => {
+                          if (resendCooldown > 0) return;
+                          setOtpSending(true);
+                          setAuthFeedback(null);
+                          try {
+                            const res = await fetch('/api/auth/recover', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ step: 'request', email: recoveryEmail })
+                            });
+                            if (res.ok) {
+                              setResendCooldown(60);
+                              setOtpCountdown(900);
+                              setAuthFeedback(null);
+                            }
+                          } finally {
+                            setOtpSending(false);
+                          }
+                        }}
+                      >
+                        {resendCooldown > 0 ? `Reenviar em ${resendCooldown}s` : '🔄 Reenviar código'}
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                {/* Step 3: New Password */}
+                {recoveryStep === 'reset' && (
+                  <>
+                    <div style={{ color: 'var(--success)', fontSize: '13px', marginBottom: '16px', fontWeight: 600, textAlign: 'center' }}>
+                      🔓 Código verificado! Defina sua nova senha abaixo.
                     </div>
                     <div className="login-input-group">
                       <label className="form-label">Nova senha</label>
@@ -1098,11 +1254,12 @@ export default function Dashboard() {
                         autoComplete="new-password"
                       />
                     </div>
-                    <button type="submit" className="login-btn-premium">
-                      Redefinir Senha e Entrar
+                    <button type="submit" className="login-btn-premium" disabled={otpResetting}>
+                      {otpResetting ? 'Redefinindo...' : '🔐 Redefinir Senha'}
                     </button>
                   </>
                 )}
+
               </form>
             ) : (
               <form onSubmit={handleAuthSubmit} autoComplete="off">
