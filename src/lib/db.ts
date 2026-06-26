@@ -73,6 +73,32 @@ export interface PaymentCoupon {
   bonusAmount: number;
 }
 
+export interface Transaction {
+  id: string;
+  userEmail: string;
+  amount: number;
+  type: 'deposit' | 'order' | 'refund' | 'bonus';
+  description: string;
+  createdAt: string;
+}
+
+export interface Ticket {
+  id: string;
+  userEmail: string;
+  subject: string;
+  message: string;
+  status: 'aberto' | 'respondido' | 'fechado';
+  createdAt: string;
+}
+
+export interface TicketMessage {
+  id: string;
+  ticketId: string;
+  sender: 'user' | 'admin';
+  message: string;
+  createdAt: string;
+}
+
 interface DatabaseSchema {
   user: UserStats;
   services: Service[];
@@ -82,6 +108,9 @@ interface DatabaseSchema {
   coupons?: Coupon[];
   couponUses?: CouponUse[];
   paymentCoupons?: PaymentCoupon[];
+  transactions?: Transaction[];
+  tickets?: Ticket[];
+  ticketMessages?: TicketMessage[];
 }
 
 const DEFAULT_SERVICES: Service[] = [
@@ -387,25 +416,28 @@ export const dbHelper = {
     if (supabase) {
       try {
         const user = await dbHelper.getUserByEmail(email);
-        if (user) {
-          const newBalance = user.balance + amount;
-          const updates: any = { balance: newBalance };
-          
-          if (amount < 0) {
-            updates.total_spent = user.totalSpent + Math.abs(amount);
-            updates.total_orders = user.totalOrders + 1;
-          }
-
-          const { error } = await supabase
-            .from('users')
-            .update(updates)
-            .eq('email', email);
-
-          if (error) throw error;
-          return;
+        if (!user) {
+          throw new Error(`User with email ${email} not found for balance update`);
         }
+        
+        const newBalance = user.balance + amount;
+        const updates: any = { balance: newBalance };
+        
+        if (amount < 0) {
+          updates.total_spent = user.totalSpent + Math.abs(amount);
+          updates.total_orders = user.totalOrders + 1;
+        }
+
+        const { error } = await supabase
+          .from('users')
+          .update(updates)
+          .eq('email', email);
+
+        if (error) throw error;
+        return;
       } catch (err) {
-        console.error('Supabase balance update failed, updating local DB:', err);
+        console.error('Supabase balance update failed:', err);
+        throw err;
       }
     }
 
@@ -648,25 +680,31 @@ export const dbHelper = {
   updatePaymentStatus: async (id: string, status: 'approved' | 'rejected'): Promise<Payment | null> => {
     if (supabase) {
       try {
-        // Fetch payment details
-        const { data: payData, error: payError } = await supabase
+        // Try to update status only if it is not already equal to the target status
+        const { data: updatedRows, error: updateError } = await supabase
           .from('payments')
-          .select('*')
+          .update({ status: status })
           .eq('id', id)
-          .maybeSingle();
+          .neq('status', status)
+          .select();
 
-        if (payError) throw payError;
+        if (updateError) throw updateError;
 
-        if (payData && payData.status !== status) {
-          const { error: updateError } = await supabase
-            .from('payments')
-            .update({ status: status })
-            .eq('id', id);
-
-          if (updateError) throw updateError;
-
+        if (updatedRows && updatedRows.length > 0) {
+          const payData = updatedRows[0];
+          
           if (status === 'approved') {
-            await dbHelper.updateUserBalance(payData.user_email, parseFloat(payData.amount));
+            try {
+              await dbHelper.updateUserBalance(payData.user_email, parseFloat(payData.amount));
+            } catch (balanceErr) {
+              console.error('Failed to update user balance, rolling back payment status to pending:', balanceErr);
+              // Rollback status in database
+              await supabase
+                .from('payments')
+                .update({ status: 'pending' })
+                .eq('id', id);
+              throw balanceErr;
+            }
           }
 
           return {
@@ -678,9 +716,14 @@ export const dbHelper = {
             createdAt: payData.created_at,
             userEmail: payData.user_email
           };
+        } else {
+          // If no rows were updated, it means it was already approved or doesn't exist.
+          // Return null as expected by the webhook caller to indicate no transition occurred.
+          return null;
         }
       } catch (err) {
-        console.error('Supabase payment update failed, executing on local fallback:', err);
+        console.error('Supabase payment update failed:', err);
+        throw err; // Rethrow to let API handlers know something went wrong
       }
     }
 
@@ -736,18 +779,21 @@ export const dbHelper = {
     if (supabase) {
       try {
         const user = await dbHelper.getUserByEmail(email);
-        if (user) {
-          const newBalance = user.balance + amount;
-          const { error } = await supabase
-            .from('users')
-            .update({ balance: newBalance })
-            .eq('email', email);
-
-          if (error) throw error;
-          return;
+        if (!user) {
+          throw new Error(`User with email ${email} not found for balance adjustment`);
         }
+        
+        const newBalance = user.balance + amount;
+        const { error } = await supabase
+          .from('users')
+          .update({ balance: newBalance })
+          .eq('email', email);
+
+        if (error) throw error;
+        return;
       } catch (err) {
         console.error('Supabase adjust balance failed:', err);
+        throw err;
       }
     }
     
@@ -1265,5 +1311,349 @@ export const dbHelper = {
     const db = getLocalDb();
     const found = (db.paymentCoupons || []).find(pc => pc.paymentId === paymentId);
     return found || null;
+  },
+
+  addTransaction: async (transaction: Omit<Transaction, 'id' | 'createdAt'>): Promise<Transaction> => {
+    const id = Math.random().toString(36).substring(2, 15);
+    const createdAt = new Date().toISOString();
+    const newTx: Transaction = {
+      id,
+      createdAt,
+      ...transaction
+    };
+
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('transactions')
+          .insert({
+            user_email: newTx.userEmail,
+            amount: newTx.amount,
+            type: newTx.type,
+            description: newTx.description,
+            created_at: newTx.createdAt
+          });
+        if (error) throw error;
+      } catch (err) {
+        console.error('Supabase addTransaction failed, writing to local:', err);
+      }
+    }
+
+    const db = getLocalDb();
+    if (!db.transactions) db.transactions = [];
+    db.transactions.unshift(newTx);
+    saveLocalDb(db);
+    return newTx;
+  },
+
+  getTransactions: async (email: string): Promise<Transaction[]> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_email', email)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        return (data || []).map(t => ({
+          id: t.id,
+          userEmail: t.user_email,
+          amount: parseFloat(t.amount),
+          type: t.type as any,
+          description: t.description,
+          createdAt: t.created_at
+        }));
+      } catch (err) {
+        console.error('Supabase getTransactions failed, using local:', err);
+      }
+    }
+    const db = getLocalDb();
+    return (db.transactions || []).filter(t => t.userEmail.toLowerCase() === email.toLowerCase());
+  },
+
+  createTicket: async (email: string, subject: string, message: string): Promise<Ticket> => {
+    const id = Math.random().toString(36).substring(2, 15);
+    const createdAt = new Date().toISOString();
+    const newTicket: Ticket = {
+      id,
+      userEmail: email,
+      subject,
+      message,
+      status: 'aberto',
+      createdAt
+    };
+
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('tickets')
+          .insert({
+            id,
+            user_email: email,
+            subject,
+            message,
+            status: 'aberto',
+            created_at: createdAt
+          });
+        if (error) throw error;
+      } catch (err) {
+        console.error('Supabase createTicket failed, writing to local:', err);
+      }
+    }
+
+    const db = getLocalDb();
+    if (!db.tickets) db.tickets = [];
+    db.tickets.unshift(newTicket);
+    saveLocalDb(db);
+    return newTicket;
+  },
+
+  getTickets: async (email?: string): Promise<Ticket[]> => {
+    if (supabase) {
+      try {
+        let query = supabase.from('tickets').select('*').order('created_at', { ascending: false });
+        if (email) {
+          query = query.eq('user_email', email);
+        }
+        const { data, error } = await query;
+        if (error) throw error;
+        return (data || []).map(t => ({
+          id: t.id,
+          userEmail: t.user_email,
+          subject: t.subject,
+          message: t.message,
+          status: t.status as any,
+          createdAt: t.created_at
+        }));
+      } catch (err) {
+        console.error('Supabase getTickets failed, using local:', err);
+      }
+    }
+    const db = getLocalDb();
+    if (email) {
+      return (db.tickets || []).filter(t => t.userEmail.toLowerCase() === email.toLowerCase());
+    }
+    return db.tickets || [];
+  },
+
+  getTicketById: async (id: string): Promise<{ ticket: Ticket; messages: TicketMessage[] } | null> => {
+    if (supabase) {
+      try {
+        const { data: ticketData, error: tErr } = await supabase
+          .from('tickets')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (tErr) throw tErr;
+        if (!ticketData) return null;
+
+        const { data: msgData, error: mErr } = await supabase
+          .from('ticket_messages')
+          .select('*')
+          .eq('ticket_id', id)
+          .order('created_at', { ascending: true });
+
+        if (mErr) throw mErr;
+
+        return {
+          ticket: {
+            id: ticketData.id,
+            userEmail: ticketData.user_email,
+            subject: ticketData.subject,
+            message: ticketData.message,
+            status: ticketData.status as any,
+            createdAt: ticketData.created_at
+          },
+          messages: (msgData || []).map(m => ({
+            id: m.id,
+            ticketId: m.ticket_id,
+            sender: m.sender as any,
+            message: m.message,
+            createdAt: m.created_at
+          }))
+        };
+      } catch (err) {
+        console.error('Supabase getTicketById failed, using local:', err);
+      }
+    }
+
+    const db = getLocalDb();
+    const ticket = (db.tickets || []).find(t => t.id === id);
+    if (!ticket) return null;
+
+    const messages = (db.ticketMessages || []).filter(m => m.ticketId === id);
+    return { ticket, messages };
+  },
+
+  addTicketMessage: async (ticketId: string, sender: 'user' | 'admin', message: string): Promise<TicketMessage> => {
+    const id = Math.random().toString(36).substring(2, 15);
+    const createdAt = new Date().toISOString();
+    const newMsg: TicketMessage = {
+      id,
+      ticketId,
+      sender,
+      message,
+      createdAt
+    };
+
+    const isClosing = message.startsWith('[Sistema] Ticket encerrado');
+    const newStatus = isClosing ? 'fechado' : (sender === 'admin' ? 'respondido' : 'aberto');
+
+    if (supabase) {
+      try {
+        const { error: msgErr } = await supabase
+          .from('ticket_messages')
+          .insert({
+            id,
+            ticket_id: ticketId,
+            sender,
+            message,
+            created_at: createdAt
+          });
+        if (msgErr) throw msgErr;
+
+        const { error: statusErr } = await supabase
+          .from('tickets')
+          .update({ status: newStatus })
+          .eq('id', ticketId);
+        if (statusErr) throw statusErr;
+      } catch (err) {
+        console.error('Supabase addTicketMessage failed, writing to local:', err);
+      }
+    }
+
+    const db = getLocalDb();
+    if (!db.ticketMessages) db.ticketMessages = [];
+    db.ticketMessages.push(newMsg);
+
+    if (db.tickets) {
+      const ticket = db.tickets.find(t => t.id === ticketId);
+      if (ticket) {
+        ticket.status = newStatus;
+      }
+    }
+    saveLocalDb(db);
+    return newMsg;
+  },
+
+  updateTicketStatus: async (ticketId: string, status: 'aberto' | 'respondido' | 'fechado'): Promise<void> => {
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('tickets')
+          .update({ status })
+          .eq('id', ticketId);
+        if (error) throw error;
+      } catch (err) {
+        console.error('Supabase updateTicketStatus failed, writing to local:', err);
+      }
+    }
+
+    const db = getLocalDb();
+    if (db.tickets) {
+      const ticket = db.tickets.find(t => t.id === ticketId);
+      if (ticket) {
+        ticket.status = status;
+        saveLocalDb(db);
+      }
+    }
+  },
+
+  getAllOrdersAdmin: async (): Promise<Order[]> => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('orders')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        return (data || []).map(o => ({
+          id: o.id,
+          serviceId: o.service_id,
+          serviceName: o.service_name,
+          link: o.link,
+          quantity: o.quantity,
+          charge: parseFloat(o.charge),
+          status: o.status as any,
+          createdAt: o.created_at,
+          userEmail: o.user_email
+        }));
+      } catch (err) {
+        console.error('Supabase getAllOrdersAdmin failed, using local:', err);
+      }
+    }
+    return getLocalDb().orders;
+  },
+
+  refundOrder: async (orderId: string): Promise<boolean> => {
+    const order = await dbHelper.getOrderById(orderId);
+    if (!order) return false;
+    if (order.status === 'Cancelado') return false; // Prevent double refund
+
+    // Update status to 'Cancelado'
+    await dbHelper.updateOrderStatus(orderId, 'Cancelado');
+
+    // Refund the amount to the user's balance
+    if (order.userEmail) {
+      await dbHelper.updateUserBalance(order.userEmail, order.charge);
+      // Log the transaction
+      await dbHelper.addTransaction({
+        userEmail: order.userEmail,
+        amount: order.charge,
+        type: 'refund',
+        description: `Estorno do pedido #${orderId} (${order.serviceName})`
+      });
+    }
+
+    return true;
+  },
+
+  updateUserPassword: async (email: string, passwordHash: string): Promise<boolean> => {
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('users')
+          .update({ password_hash: passwordHash })
+          .eq('email', email);
+        if (error) throw error;
+      } catch (err) {
+        console.error('Supabase updateUserPassword failed:', err);
+      }
+    }
+    const db = getLocalDb();
+    if ((db.user?.email || 'admin@goobox.com').toLowerCase() === email.toLowerCase()) {
+      db.user.passwordHash = passwordHash;
+      saveLocalDb(db);
+      return true;
+    }
+    const users = db.usersList || [];
+    const idx = users.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
+    if (idx !== -1) {
+      users[idx].passwordHash = passwordHash;
+      saveLocalDb(db);
+      return true;
+    }
+    return false;
+  },
+
+  deleteSetting: async (key: string): Promise<void> => {
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('settings')
+          .delete()
+          .eq('key', key);
+        if (error) throw error;
+        return;
+      } catch (err) {
+        console.error('Supabase deleteSetting failed:', err);
+      }
+    }
+    const db = getLocalDb() as any;
+    if (db.settings && db.settings[key] !== undefined) {
+      delete db.settings[key];
+      saveLocalDb(db);
+    }
   }
 };

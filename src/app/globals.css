@@ -83,6 +83,12 @@ html, body {
   gap: 12px;
   margin-bottom: 32px;
   padding-left: 8px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.logo-section:hover {
+  transform: scale(1.03);
 }
 
 .logo-text {
@@ -654,6 +660,13 @@ html, body {
 }
 
 @media (max-width: 768px) {
+  .mobile-logo-header {
+    display: flex !important;
+  }
+  .app-container {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
   .sidebar {
     display: none !important;
   }
@@ -664,6 +677,8 @@ html, body {
     margin-left: 0 !important;
     padding: 16px;
     padding-bottom: 96px;
+    max-width: 100%;
+    overflow-x: hidden;
   }
   .widgets-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -703,6 +718,8 @@ html, body {
   .panel-card {
     padding: 16px;
     border-radius: 16px;
+    max-width: 100%;
+    overflow: hidden;
   }
   .panel-header {
     padding: 14px;
@@ -719,6 +736,10 @@ html, body {
     -webkit-overflow-scrolling: touch;
     margin: 0 -16px;
     padding: 0 16px;
+  }
+  .smm-table {
+    width: max-content !important;
+    min-width: 100%;
   }
   .smm-table th,
   .smm-table td {

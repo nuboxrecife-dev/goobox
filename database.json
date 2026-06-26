@@ -4249,6 +4249,15 @@
   "orders": [],
   "payments": [
     {
+      "id": "sim_56345359",
+      "amount": 1,
+      "status": "pending",
+      "qrCodeBase64": "mock",
+      "qrCode": "mock",
+      "createdAt": "2026-06-25T22:39:59.943Z",
+      "userEmail": "test-simulation@goobox.com"
+    },
+    {
       "id": "1346937529",
       "amount": 15,
       "status": "pending",
@@ -4260,5 +4269,129 @@
   ],
   "coupons": [],
   "couponUses": [],
-  "paymentCoupons": []
+  "paymentCoupons": [],
+  "usersList": [],
+  "transactions": [
+    {
+      "id": "sj93fsbeq48",
+      "createdAt": "2026-06-25T22:47:43.164Z",
+      "userEmail": "test_commercial_74991@goobox.com",
+      "amount": 50,
+      "type": "deposit",
+      "description": "Depósito Pix de Teste"
+    },
+    {
+      "id": "yk9q3pxz7cm",
+      "createdAt": "2026-06-25T02:34:40.600Z",
+      "userEmail": "test_commercial_75526@goobox.com",
+      "amount": 50,
+      "type": "deposit",
+      "description": "Depósito Pix de Teste"
+    },
+    {
+      "id": "vuci86lklso",
+      "createdAt": "2026-06-25T02:32:15.107Z",
+      "userEmail": "test_commercial_28846@goobox.com",
+      "amount": 50,
+      "type": "deposit",
+      "description": "Depósito Pix de Teste"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "brbht34596b",
+      "userEmail": "test_commercial_74991@goobox.com",
+      "subject": "Problema com saldo de teste",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "status": "fechado",
+      "createdAt": "2026-06-25T22:47:43.192Z"
+    },
+    {
+      "id": "v7gv6rxvbzq",
+      "userEmail": "test_commercial_75526@goobox.com",
+      "subject": "Problema com saldo de teste",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "status": "fechado",
+      "createdAt": "2026-06-25T02:34:40.625Z"
+    },
+    {
+      "id": "e4zlyrm4bej",
+      "userEmail": "test_commercial_28846@goobox.com",
+      "subject": "Problema com saldo de teste",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "status": "aberto",
+      "createdAt": "2026-06-25T02:32:15.133Z"
+    }
+  ],
+  "ticketMessages": [
+    {
+      "id": "akc5wtc056",
+      "ticketId": "e4zlyrm4bej",
+      "sender": "user",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "createdAt": "2026-06-25T02:32:15.138Z"
+    },
+    {
+      "id": "4xk1ckwbzzn",
+      "ticketId": "e4zlyrm4bej",
+      "sender": "user",
+      "message": "Favor verificar com urgência!",
+      "createdAt": "2026-06-25T02:32:15.169Z"
+    },
+    {
+      "id": "vacpyqt47xg",
+      "ticketId": "e4zlyrm4bej",
+      "sender": "user",
+      "message": "[Sistema] Ticket encerrado pelo Usuário.",
+      "createdAt": "2026-06-25T02:32:15.192Z"
+    },
+    {
+      "id": "c0skq3g990g",
+      "ticketId": "v7gv6rxvbzq",
+      "sender": "user",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "createdAt": "2026-06-25T02:34:40.630Z"
+    },
+    {
+      "id": "5twjjrl2yqi",
+      "ticketId": "v7gv6rxvbzq",
+      "sender": "user",
+      "message": "Favor verificar com urgência!",
+      "createdAt": "2026-06-25T02:34:40.658Z"
+    },
+    {
+      "id": "26pnqw1gdqj",
+      "ticketId": "v7gv6rxvbzq",
+      "sender": "user",
+      "message": "[Sistema] Ticket encerrado pelo Usuário.",
+      "createdAt": "2026-06-25T02:34:40.681Z"
+    },
+    {
+      "id": "uzw06i4t1b",
+      "ticketId": "brbht34596b",
+      "sender": "user",
+      "message": "Meu depósito de R$ 50 não foi computado.",
+      "createdAt": "2026-06-25T22:47:43.199Z"
+    },
+    {
+      "id": "5t3c60heb76",
+      "ticketId": "brbht34596b",
+      "sender": "user",
+      "message": "Favor verificar com urgência!",
+      "createdAt": "2026-06-25T22:47:43.232Z"
+    },
+    {
+      "id": "pu7n642wjeo",
+      "ticketId": "brbht34596b",
+      "sender": "user",
+      "message": "[Sistema] Ticket encerrado pelo Usuário.",
+      "createdAt": "2026-06-25T22:47:43.257Z"
+    }
+  ],
+  "settings": {
+    "reset_token:b16f78c2402ba244627cc330edbfd3031ccd8a3af2a9a5c0": "{\"email\":\"test_commercial_28846@goobox.com\",\"expiresAt\":1782358335211}",
+    "reset_token:invalid_token_12345": "",
+    "reset_token:6173b5a29827d8ec1f9bff07855572cee7fc4acf8c6175c0": "",
+    "reset_token:277fb4e9c54b61ff7c58fc7a64da8bd02c6d26a7fdc7f982": ""
+  }
 }

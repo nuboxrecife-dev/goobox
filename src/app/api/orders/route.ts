@@ -123,6 +123,14 @@ export async function POST(request: Request) {
     // Deduct user balance in central db
     await dbHelper.updateUserBalance(user.email, -charge);
 
+    // Registrar transação
+    await dbHelper.addTransaction({
+      userEmail: user.email,
+      amount: -charge,
+      type: 'order',
+      description: `Compra do serviço #${serviceId} - ${service.name} (Qtd: ${quantity})`
+    });
+
     // Save order in local database
     const newOrder = await dbHelper.addOrder({
       id: supplierOrderId?.toString(),

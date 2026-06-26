@@ -63,16 +63,30 @@ export async function POST(request: Request) {
     if (shouldApprove) {
       const updated = await dbHelper.updatePaymentStatus(paymentId, 'approved');
       if (updated) {
-        console.log(`Pagamento ${paymentId} APROVADO. Saldo atualizado com sucesso!`);
-        
-        // Apply coupon bonus if associated with this payment
         const email = updated.userEmail || 'admin@goobox.com';
+        
+        // Registrar transação de depósito
+        await dbHelper.addTransaction({
+          userEmail: email,
+          amount: updated.amount,
+          type: 'deposit',
+          description: `Recarga de saldo via Pix (ID: ${paymentId})`
+        });
+
         try {
           const paymentCoupon = await dbHelper.getPaymentCoupon(paymentId);
           if (paymentCoupon) {
             console.log(`Bônus de cupom encontrado para pagamento ${paymentId}: Código: ${paymentCoupon.couponCode}, Valor: R$ ${paymentCoupon.bonusAmount}`);
             await dbHelper.updateUserBalance(email, paymentCoupon.bonusAmount);
             await dbHelper.registerCouponUse(paymentCoupon.couponCode, email);
+
+            // Registrar transação do bônus do cupom
+            await dbHelper.addTransaction({
+              userEmail: email,
+              amount: paymentCoupon.bonusAmount,
+              type: 'bonus',
+              description: `Bônus do cupom de recarga (${paymentCoupon.couponCode})`
+            });
           }
         } catch (couponErr) {
           console.error('Error applying coupon bonus on payment approval:', couponErr);

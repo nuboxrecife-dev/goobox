@@ -113,3 +113,39 @@ CREATE POLICY "Allow all to service_role" ON coupons USING (true) WITH CHECK (tr
 CREATE POLICY "Allow all to service_role" ON coupon_uses USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all to service_role" ON payment_coupons USING (true) WITH CHECK (true);
 
+-- 9. Create TRANSACTIONS table
+CREATE TABLE IF NOT EXISTS transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_email VARCHAR(255) NOT NULL,
+    amount DECIMAL(15, 5) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    description TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all to service_role" ON transactions USING (true) WITH CHECK (true);
+
+-- 10. Create TICKETS table
+CREATE TABLE IF NOT EXISTS tickets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_email VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'aberto' NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all to service_role" ON tickets USING (true) WITH CHECK (true);
+
+-- 11. Create TICKET_MESSAGES table
+CREATE TABLE IF NOT EXISTS ticket_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_id UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    sender VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE ticket_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all to service_role" ON ticket_messages USING (true) WITH CHECK (true);
+
+

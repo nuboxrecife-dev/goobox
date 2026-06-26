@@ -5,9 +5,13 @@ export async function GET() {
   try {
     const markup = await dbHelper.getSetting('service_markup_percent', '20');
     const whatsapp = await dbHelper.getSetting('support_whatsapp_number', '5511999999999');
+    const announcementText = await dbHelper.getSetting('announcement_text', '');
+    const announcementType = await dbHelper.getSetting('announcement_type', 'info');
     return NextResponse.json({ 
       serviceMarkupPercent: parseFloat(markup),
-      supportWhatsappNumber: whatsapp
+      supportWhatsappNumber: whatsapp,
+      announcementText,
+      announcementType
     });
   } catch (error) {
     console.error('Error fetching admin settings:', error);
@@ -17,7 +21,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { serviceMarkupPercent, supportWhatsappNumber } = await request.json();
+    const { serviceMarkupPercent, supportWhatsappNumber, announcementText, announcementType } = await request.json();
 
     if (serviceMarkupPercent !== undefined) {
       if (isNaN(parseFloat(serviceMarkupPercent)) || parseFloat(serviceMarkupPercent) < 0) {
@@ -32,6 +36,18 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Número de WhatsApp inválido. Insira apenas números com DDI + DDD (ex: 5511999999999).' }, { status: 400 });
       }
       await dbHelper.updateSetting('support_whatsapp_number', cleaned);
+    }
+
+    if (announcementText !== undefined) {
+      await dbHelper.updateSetting('announcement_text', announcementText);
+    }
+
+    if (announcementType !== undefined) {
+      const allowed = ['info', 'warning', 'success'];
+      if (!allowed.includes(announcementType)) {
+        return NextResponse.json({ error: 'Tipo de aviso inválido.' }, { status: 400 });
+      }
+      await dbHelper.updateSetting('announcement_type', announcementType);
     }
     
     return NextResponse.json({ 

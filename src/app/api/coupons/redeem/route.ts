@@ -49,6 +49,14 @@ export async function POST(request: Request) {
     // Register coupon use
     await dbHelper.registerCouponUse(code, email);
 
+    // Registrar transação do bônus direto
+    await dbHelper.addTransaction({
+      userEmail: email,
+      amount: bonus,
+      type: 'bonus',
+      description: `Resgate de cupom de saldo grátis (${code.toUpperCase()})`
+    });
+
     return NextResponse.json({
       success: true,
       message: `Sucesso! R$ ${bonus.toFixed(2)} foram creditados na sua conta.`,

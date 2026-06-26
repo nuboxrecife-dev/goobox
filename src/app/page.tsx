@@ -2,8 +2,34 @@
 
 import { useState, useEffect } from 'react';
 
-type Tab = 'novo-pedido' | 'servicos' | 'adicionar-saldo' | 'pedidos' | 'api' | 'admin';
-type AuthScreen = 'login' | 'register';
+type Tab = 'novo-pedido' | 'servicos' | 'adicionar-saldo' | 'pedidos' | 'extrato' | 'suporte' | 'api' | 'admin' | 'perfil';
+type AuthScreen = 'login' | 'register' | 'forgot' | 'reset';
+
+interface Transaction {
+  id: string;
+  userEmail: string;
+  amount: number;
+  type: 'deposit' | 'order' | 'refund' | 'bonus';
+  description: string;
+  createdAt: string;
+}
+
+interface Ticket {
+  id: string;
+  userEmail: string;
+  subject: string;
+  message: string;
+  status: 'aberto' | 'respondido' | 'fechado';
+  createdAt: string;
+}
+
+interface TicketMessage {
+  id: string;
+  ticketId: string;
+  sender: 'user' | 'admin';
+  message: string;
+  createdAt: string;
+}
 
 interface UserStats {
   name: string;
@@ -34,6 +60,7 @@ interface Order {
   charge: number;
   status: 'Pendente' | 'Processando' | 'Concluido' | 'Cancelado' | 'Parcial';
   createdAt: string;
+  userEmail?: string;
 }
 
 interface Payment {
@@ -66,6 +93,19 @@ export default function Dashboard() {
   const [authPassword, setAuthPassword] = useState('');
   const [authFeedback, setAuthFeedback] = useState<string | null>(null);
 
+  // Password Recovery / Reset inputs
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  // Form states for change password (profile)
+  const [changePasswordCurrent, setChangePasswordCurrent] = useState('');
+  const [changePasswordNew, setChangePasswordNew] = useState('');
+  const [changePasswordConfirm, setChangePasswordConfirm] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [changePasswordFeedback, setChangePasswordFeedback] = useState<{ success: boolean; message: string } | null>(null);
+
   const [activeTab, setActiveTab] = useState<Tab>('novo-pedido');
   const [user, setUser] = useState<UserStats | null>(null);
   const [services, setServices] = useState<Service[]>([]);
@@ -92,6 +132,13 @@ export default function Dashboard() {
   const [adminUsers, setAdminUsers] = useState<UserStats[]>([]);
   const [markupPercent, setMarkupPercent] = useState<number>(20);
   const [whatsappNumber, setWhatsappNumber] = useState<string>('5511999999999');
+  const [announcementText, setAnnouncementText] = useState('');
+  const [announcementType, setAnnouncementType] = useState<'info' | 'warning' | 'success'>('info');
+  const [adminTab, setAdminTab] = useState<'geral' | 'usuarios' | 'servicos' | 'pedidos' | 'cupons' | 'suporte'>('geral');
+  const [adminOrders, setAdminOrders] = useState<Order[]>([]);
+  const [adminOrdersSearch, setAdminOrdersSearch] = useState('');
+  const [adminOrdersStatusFilter, setAdminOrdersStatusFilter] = useState('');
+  const [adminOrdersLoading, setAdminOrdersLoading] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminFeedback, setAdminFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [adjustingUserEmail, setAdjustingUserEmail] = useState('');
@@ -150,6 +197,14 @@ export default function Dashboard() {
   const [directCouponFeedback, setDirectCouponFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [isRedeemingDirect, setIsRedeemingDirect] = useState(false);
   const [refillLoading, setRefillLoading] = useState<string | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [selectedTicketMessages, setSelectedTicketMessages] = useState<TicketMessage[]>([]);
+  const [ticketSubject, setTicketSubject] = useState('');
+  const [ticketMessage, setTicketMessage] = useState('');
+  const [ticketReply, setTicketReply] = useState('');
+  const [supportFeedback, setSupportFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
   // Check auth session
   useEffect(() => {
@@ -166,6 +221,18 @@ export default function Dashboard() {
     setLoading(false);
   }, []);
 
+  // Read reset token from URL query params
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const token = searchParams.get('token');
+      if (token) {
+        setResetToken(token);
+        setAuthScreen('reset');
+      }
+    }
+  }, []);
+
   // Fetch initial SMM data after auth
   const fetchData = async () => {
     if (!isAuthenticated) return;
@@ -174,12 +241,14 @@ export default function Dashboard() {
       const sessionUser = sessionUserStr ? JSON.parse(sessionUserStr) : null;
       const emailParam = sessionUser?.email ? `?email=${encodeURIComponent(sessionUser.email)}` : '';
 
-      const [userRes, servicesRes, ordersRes, paymentsRes, settingsRes] = await Promise.all([
+      const [userRes, servicesRes, ordersRes, paymentsRes, settingsRes, transactionsRes, ticketsRes] = await Promise.all([
         fetch(`/api/user${emailParam}`),
         fetch('/api/services'),
         fetch(`/api/orders${emailParam}`),
         fetch(`/api/payment${emailParam}`),
-        fetch('/api/admin/settings')
+        fetch('/api/admin/settings'),
+        fetch(`/api/transactions${emailParam}`),
+        fetch(`/api/tickets${emailParam}`).catch(() => null)
       ]);
 
       const userData = await userRes.json();
@@ -187,6 +256,8 @@ export default function Dashboard() {
       const ordersData = await ordersRes.json();
       const paymentsData = await paymentsRes.json();
       const settingsData = await settingsRes.json();
+      const transactionsData = await transactionsRes.json();
+      const ticketsData = ticketsRes && ticketsRes.ok ? await ticketsRes.json() : [];
 
       // Merge current active session details if customized
       if (sessionUser) {
@@ -206,11 +277,19 @@ export default function Dashboard() {
       setServices(servicesData);
       setOrders(ordersData);
       setPayments(paymentsData || []);
+      setTransactions(transactionsData || []);
+      setTickets(ticketsData || []);
       if (settingsData && settingsData.supportWhatsappNumber) {
         setWhatsappNumber(settingsData.supportWhatsappNumber);
       }
       if (settingsData && settingsData.serviceMarkupPercent !== undefined) {
         setMarkupPercent(settingsData.serviceMarkupPercent);
+      }
+      if (settingsData && settingsData.announcementText !== undefined) {
+        setAnnouncementText(settingsData.announcementText);
+      }
+      if (settingsData && settingsData.announcementType !== undefined) {
+        setAnnouncementType(settingsData.announcementType);
       }
 
       if (servicesData.length > 0) {
@@ -222,26 +301,96 @@ export default function Dashboard() {
     }
   };
 
+  // Pure JS confetti celebration effect
+  const triggerConfetti = () => {
+    const colors = ['#6c25e2', '#00bfa5', '#ff3366', '#ffeb3b', '#2196f3'];
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100vw';
+    container.style.height = '100vh';
+    container.style.pointerEvents = 'none';
+    container.style.zIndex = '99999';
+    document.body.appendChild(container);
+
+    for (let i = 0; i < 100; i++) {
+      const particle = document.createElement('div');
+      particle.style.position = 'absolute';
+      particle.style.width = `${Math.random() * 8 + 6}px`;
+      particle.style.height = `${Math.random() * 15 + 8}px`;
+      particle.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+      particle.style.top = '-20px';
+      particle.style.left = `${Math.random() * 100}vw`;
+      particle.style.borderRadius = '2px';
+      particle.style.opacity = (Math.random() * 0.5 + 0.5).toString();
+      
+      const duration = Math.random() * 3 + 2;
+      const delay = Math.random() * 1.5;
+      
+      particle.style.transition = `transform ${duration}s linear ${delay}s, opacity ${duration}s linear ${delay}s`;
+      container.appendChild(particle);
+
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          particle.style.transform = `translate(${Math.random() * 200 - 100}px, 105vh) rotate(${Math.random() * 720}deg)`;
+          particle.style.opacity = '0';
+        }, 100);
+      });
+    }
+
+    setTimeout(() => {
+      container.remove();
+    }, 5000);
+  };
+
+  // Real-time polling for pending Pix payments status
+  useEffect(() => {
+    if (!generatedPix || generatedPix.status !== 'pending' || !user) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/payment?email=${encodeURIComponent(user.email)}`);
+        if (res.ok) {
+          const paymentsList: Payment[] = await res.json();
+          const currentPayment = paymentsList.find(p => p.id === generatedPix.id);
+          if (currentPayment && currentPayment.status === 'approved') {
+            setGeneratedPix(currentPayment);
+            await fetchData();
+            triggerConfetti();
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao verificar status do Pix:', err);
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [generatedPix, user]);
+
   const fetchAdminData = async () => {
     if (!isAuthenticated || user?.role !== 'admin') return;
     setAdminLoading(true);
     setAdminCouponsLoading(true);
     try {
-      const [usersRes, settingsRes, metricsRes, couponsRes] = await Promise.all([
+      const [usersRes, settingsRes, metricsRes, couponsRes, ordersRes] = await Promise.all([
         fetch('/api/admin/users'),
         fetch('/api/admin/settings'),
         fetch('/api/admin/metrics'),
-        fetch('/api/admin/coupons')
+        fetch('/api/admin/coupons'),
+        fetch('/api/admin/orders').catch(() => null)
       ]);
       if (usersRes.ok && settingsRes.ok && metricsRes.ok && couponsRes.ok) {
         const usersData = await usersRes.json();
         const settingsData = await settingsRes.json();
         const metricsData = await metricsRes.json();
         const couponsData = await couponsRes.json();
+        const ordersData = ordersRes && ordersRes.ok ? await ordersRes.json() : [];
         setAdminUsers(usersData);
         setMarkupPercent(settingsData.serviceMarkupPercent);
         setAdminMetrics(metricsData);
         setAdminCoupons(couponsData);
+        setAdminOrders(ordersData || []);
         if (settingsData.supportWhatsappNumber) {
           setWhatsappNumber(settingsData.supportWhatsappNumber);
         }
@@ -270,7 +419,9 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           serviceMarkupPercent: markupPercent,
-          supportWhatsappNumber: whatsappNumber
+          supportWhatsappNumber: whatsappNumber,
+          announcementText,
+          announcementType
         })
       });
       const data = await res.json();
@@ -548,6 +699,13 @@ export default function Dashboard() {
     }
   }, [selectedServiceId, orderQuantity, services]);
 
+  // Load ticket thread when ID is selected
+  useEffect(() => {
+    if (selectedTicketId) {
+      fetchTicketThread(selectedTicketId);
+    }
+  }, [selectedTicketId]);
+
   // Handle Auth actions
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -608,6 +766,128 @@ export default function Dashboard() {
     }
   };
 
+  const handleRecoverPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthFeedback(null);
+    if (!recoveryEmail) {
+      setAuthFeedback('Preencha o e-mail de recuperação.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthFeedback(data.error || 'Erro ao solicitar recuperação.');
+      } else {
+        // Clean input
+        setRecoveryEmail('');
+        // Local simulation support: if token is returned, let user click a link directly
+        if (data.simulatedLink) {
+          console.log('Simulated link:', data.simulatedLink);
+          setAuthFeedback(`${data.message} Link de teste: ${data.simulatedLink}`);
+        } else {
+          setAuthFeedback(data.message);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setAuthFeedback('Erro ao conectar ao servidor de recuperação.');
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthFeedback(null);
+    if (!newPassword || !confirmPassword) {
+      setAuthFeedback('Preencha todos os campos da senha.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setAuthFeedback('As senhas digitadas não conferem.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: resetToken,
+          password: newPassword
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthFeedback(data.error || 'Erro ao redefinir a senha.');
+      } else {
+        setAuthFeedback(data.message);
+        setNewPassword('');
+        setConfirmPassword('');
+        setResetToken('');
+        // Redirect back to login screen in 3 seconds
+        setTimeout(() => {
+          setAuthScreen('login');
+          setAuthFeedback(null);
+        }, 3000);
+      }
+    } catch (err) {
+      console.error(err);
+      setAuthFeedback('Erro de conexão ao redefinir a senha.');
+    }
+  };
+
+  const handleLogoClick = async () => {
+    setActiveTab('novo-pedido');
+    await fetchData();
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    if (changePasswordNew !== changePasswordConfirm) {
+      setChangePasswordFeedback({ success: false, message: 'A nova senha e a confirmação não conferem.' });
+      return;
+    }
+    if (changePasswordNew.length < 6) {
+      setChangePasswordFeedback({ success: false, message: 'A nova senha deve ter no mínimo 6 caracteres.' });
+      return;
+    }
+
+    setChangePasswordLoading(true);
+    setChangePasswordFeedback(null);
+
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          currentPassword: changePasswordCurrent,
+          newPassword: changePasswordNew
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setChangePasswordFeedback({ success: true, message: data.message });
+        setChangePasswordCurrent('');
+        setChangePasswordNew('');
+        setChangePasswordConfirm('');
+      } else {
+        setChangePasswordFeedback({ success: false, message: data.error || 'Erro ao alterar a senha.' });
+      }
+    } catch (err) {
+      console.error('Error changing password:', err);
+      setChangePasswordFeedback({ success: false, message: 'Erro de conexão ao alterar a senha.' });
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
   const handleLogout = () => {
     sessionStorage.removeItem('goobox_session');
     setIsAuthenticated(false);
@@ -615,6 +895,100 @@ export default function Dashboard() {
     setAuthEmail('');
     setAuthPassword('');
     setAuthName('');
+  };
+
+  const fetchTicketThread = async (id: string) => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/tickets/${id}?email=${encodeURIComponent(user.email)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedTicketMessages(data.messages || []);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar mensagens do ticket:', err);
+    }
+  };
+
+  const handleCreateTicket = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !ticketSubject || !ticketMessage) return;
+    try {
+      const res = await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          subject: ticketSubject,
+          message: ticketMessage
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTicketSubject('');
+        setTicketMessage('');
+        // Refresh tickets
+        fetchData();
+        // Automatically open the new ticket
+        if (data.ticket) {
+          setSelectedTicketId(data.ticket.id);
+          setSelectedTicketMessages([
+            {
+              id: Math.random().toString(),
+              ticketId: data.ticket.id,
+              sender: 'user',
+              message: ticketMessage,
+              createdAt: new Date().toISOString()
+            }
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao criar ticket:', err);
+    }
+  };
+
+  const handleSendReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !selectedTicketId || !ticketReply) return;
+    try {
+      const res = await fetch(`/api/tickets/${selectedTicketId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          message: ticketReply
+        })
+      });
+      if (res.ok) {
+        setTicketReply('');
+        fetchTicketThread(selectedTicketId);
+        // Refresh ticket status in list
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Erro ao responder ticket:', err);
+    }
+  };
+
+  const handleCloseTicket = async (ticketId: string) => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/tickets/${ticketId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          action: 'close'
+        })
+      });
+      if (res.ok) {
+        fetchTicketThread(ticketId);
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Erro ao fechar ticket:', err);
+    }
   };
 
   // Handle placing order
@@ -922,6 +1296,37 @@ export default function Dashboard() {
     }
   };
 
+  const handleAdminOrderAction = async (orderId: string, action: 'update_status' | 'refund', status?: string) => {
+    if (action === 'refund') {
+      if (!confirm('Deseja realmente cancelar este pedido e reembolsar o valor cobrado na conta do cliente?')) {
+        return;
+      }
+    }
+
+    setAdminOrdersLoading(true);
+    setAdminFeedback(null);
+    try {
+      const res = await fetch('/api/admin/orders/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, orderId, status })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminFeedback({ success: true, message: data.message || 'Operação realizada com sucesso!' });
+        fetchAdminData();
+        fetchData();
+      } else {
+        setAdminFeedback({ success: false, message: data.error || 'Erro ao realizar operação.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setAdminFeedback({ success: false, message: 'Erro de conexão.' });
+    } finally {
+      setAdminOrdersLoading(false);
+    }
+  };
+
   const selectedService = services.find(s => s.id === selectedServiceId);
   const categories = Array.from(new Set(services.map(s => s.category)));
 
@@ -959,7 +1364,10 @@ export default function Dashboard() {
               </div>
               <span className="login-logo-text">Goobox</span>
               <p className="login-subtitle">
-                {authScreen === 'login' ? 'Impulsione sua presença digital com o painel SMM do futuro.' : 'Crie sua conta em segundos para começar a impulsionar suas redes sociais!'}
+                {authScreen === 'login' && 'Impulsione sua presença digital com o painel SMM do futuro.'}
+                {authScreen === 'register' && 'Crie sua conta em segundos para começar a impulsionar suas redes sociais!'}
+                {authScreen === 'forgot' && 'Informe seu e-mail cadastrado para enviarmos instruções de recuperação.'}
+                {authScreen === 'reset' && 'Defina sua nova senha de acesso ao painel.'}
               </p>
             </div>
 
@@ -969,52 +1377,107 @@ export default function Dashboard() {
               </div>
             )}
 
-            <form onSubmit={handleAuthSubmit} autoComplete="off">
-              {authScreen === 'register' && (
+            {authScreen === 'forgot' ? (
+              <form onSubmit={handleRecoverPassword} autoComplete="off">
                 <div className="login-input-group">
-                  <label className="form-label">Nome Completo</label>
+                  <label className="form-label">E-mail cadastrado</label>
                   <input
-                    type="text"
+                    type="email"
                     className="login-input-field"
-                    placeholder="Seu nome completo"
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="exemplo@goobox.com"
+                    value={recoveryEmail}
+                    onChange={(e) => setRecoveryEmail(e.target.value)}
                     required
                     autoComplete="off"
                   />
                 </div>
-              )}
+                <button type="submit" className="login-btn-premium">
+                  Enviar Link de Recuperação
+                </button>
+              </form>
+            ) : authScreen === 'reset' ? (
+              <form onSubmit={handleResetPassword} autoComplete="off">
+                <div className="login-input-group">
+                  <label className="form-label">Nova Senha</label>
+                  <input
+                    type="password"
+                    className="login-input-field"
+                    placeholder="••••••••"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                  />
+                </div>
+                <div className="login-input-group">
+                  <label className="form-label">Confirmar Nova Senha</label>
+                  <input
+                    type="password"
+                    className="login-input-field"
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                  />
+                </div>
+                <button type="submit" className="login-btn-premium">
+                  Definir Nova Senha
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleAuthSubmit} autoComplete="off">
+                {authScreen === 'register' && (
+                  <div className="login-input-group">
+                    <label className="form-label">Nome Completo</label>
+                    <input
+                      type="text"
+                      className="login-input-field"
+                      placeholder="Seu nome completo"
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      required
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
 
-              <div className="login-input-group">
-                <label className="form-label">E-mail corporativo</label>
-                <input
-                  type="email"
-                  className="login-input-field"
-                  placeholder="exemplo@goobox.com"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  required
-                  autoComplete="off"
-                />
-              </div>
+                <div className="login-input-group">
+                  <label className="form-label">E-mail corporativo</label>
+                  <input
+                    type="email"
+                    className="login-input-field"
+                    placeholder="exemplo@goobox.com"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    required
+                    autoComplete="off"
+                  />
+                </div>
 
-              <div className="login-input-group">
-                <label className="form-label">Senha de acesso</label>
-                <input
-                  type="password"
-                  className="login-input-field"
-                  placeholder="••••••••"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  required
-                  autoComplete="new-password"
-                />
-              </div>
+                <div className="login-input-group">
+                  <label className="form-label">Senha de acesso</label>
+                  <input
+                    type="password"
+                    className="login-input-field"
+                    placeholder="••••••••"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                  />
+                  {authScreen === 'login' && (
+                    <span className="login-toggle-link" style={{ display: 'block', textAlign: 'right', marginTop: '6px', fontSize: '12px' }} onClick={() => { setAuthScreen('forgot'); setAuthFeedback(null); }}>
+                      Esqueci minha senha
+                    </span>
+                  )}
+                </div>
 
-              <button type="submit" className="login-btn-premium">
-                {authScreen === 'login' ? 'Entrar no Dashboard' : 'Começar Agora - Grátis'}
-              </button>
-            </form>
+                <button type="submit" className="login-btn-premium">
+                  {authScreen === 'login' ? 'Entrar no Dashboard' : 'Começar Agora - Grátis'}
+                </button>
+              </form>
+            )}
 
             <div className="login-toggle">
               {authScreen === 'login' ? (
@@ -1024,13 +1487,17 @@ export default function Dashboard() {
                     Crie sua conta
                   </span>
                 </>
-              ) : (
+              ) : authScreen === 'register' ? (
                 <>
                   Já tem cadastro? 
                   <span className="login-toggle-link" onClick={() => { setAuthScreen('login'); setAuthFeedback(null); }}>
                     Entrar
                   </span>
                 </>
+              ) : (
+                <span className="login-toggle-link" onClick={() => { setAuthScreen('login'); setAuthFeedback(null); }}>
+                  Voltar para o Login
+                </span>
               )}
             </div>
           </div>
@@ -1091,7 +1558,7 @@ export default function Dashboard() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div>
-          <div className="logo-section">
+          <div className="logo-section" onClick={handleLogoClick} style={{ cursor: 'pointer' }}>
             {/* Box SVG logo */}
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#6c25e2' }}>
               <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
@@ -1130,6 +1597,18 @@ export default function Dashboard() {
               </svg>
               <span>Pedidos</span>
             </li>
+            <li className={`menu-item ${activeTab === 'extrato' ? 'active' : ''}`} onClick={() => setActiveTab('extrato')}>
+              <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span>Extrato</span>
+            </li>
+            <li className={`menu-item ${activeTab === 'suporte' ? 'active' : ''}`} onClick={() => setActiveTab('suporte')}>
+              <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span>Suporte</span>
+            </li>
             <li className={`menu-item ${activeTab === 'api' ? 'active' : ''}`} onClick={() => setActiveTab('api')}>
               <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
@@ -1160,11 +1639,21 @@ export default function Dashboard() {
         {/* Header */}
         <header className="header-bar">
           <div className="header-welcome">
+            {/* Clickable Mobile Logo - only visible on mobile via CSS */}
+            <div className="mobile-logo-header" onClick={handleLogoClick} style={{ cursor: 'pointer', display: 'none', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#6c25e2' }}>
+                <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                <line x1="12" y1="22.08" x2="12" y2="12" />
+              </svg>
+              <span className="logo-text" style={{ fontSize: '18px', fontWeight: 800 }}>Goobox</span>
+            </div>
+
             <h1>Olá, {user?.name || 'Cliente'}</h1>
             <p>Bem-vindo à Goobox. Impulsione suas redes sociais instantaneamente!</p>
           </div>
           <div className="header-actions">
-            <div className="icon-box" title={`Logado como: ${user?.email}`}>
+            <div className="icon-box" title={`Minha Conta (${user?.email})`} onClick={() => setActiveTab('perfil')} style={{ cursor: 'pointer', border: activeTab === 'perfil' ? '1px solid var(--primary)' : '1px solid var(--border-color)', color: activeTab === 'perfil' ? 'var(--primary)' : 'var(--text-secondary)' }}>
               <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
               </svg>
@@ -1176,6 +1665,32 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+
+        {/* Mural de Avisos (Notificação Global) */}
+        {announcementText && (
+          <div 
+            className={`payment-status-banner ${announcementType === 'success' ? 'approved' : announcementType === 'warning' ? 'pending' : 'pending'}`}
+            style={{ 
+              margin: '0 24px 20px 24px', 
+              padding: '16px 20px', 
+              borderRadius: '12px',
+              fontSize: '14px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '12px',
+              border: announcementType === 'warning' ? '1px solid rgba(255, 152, 0, 0.4)' : announcementType === 'success' ? '1px solid rgba(0, 191, 165, 0.4)' : '1px solid rgba(108, 37, 226, 0.4)',
+              background: announcementType === 'warning' ? 'rgba(255, 152, 0, 0.05)' : announcementType === 'success' ? 'rgba(0, 191, 165, 0.05)' : 'rgba(108, 37, 226, 0.05)',
+              color: announcementType === 'warning' ? '#ff9800' : announcementType === 'success' ? '#00bfa5' : '#a276ff'
+            }}
+          >
+            <span style={{ fontSize: '18px' }}>
+              {announcementType === 'success' ? '✓' : announcementType === 'warning' ? '⚠️' : '📢'}
+            </span>
+            <div style={{ flexGrow: 1, fontWeight: '500' }}>
+              {announcementText}
+            </div>
+          </div>
+        )}
 
         {/* Widgets Panel */}
         <section className="widgets-grid">
@@ -1693,6 +2208,305 @@ export default function Dashboard() {
           </div>
         )}
 
+        {activeTab === 'extrato' && (
+          <div className="panel-card">
+            <div className="panel-header secondary">
+              <div className="panel-header-icon">🧾</div>
+              <div className="panel-header-info">
+                <h2>Extrato Financeiro</h2>
+                <p>Veja todo o histórico de entradas e saídas do seu saldo</p>
+              </div>
+            </div>
+
+            <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+              <table className="smm-table">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Tipo</th>
+                    <th>Descrição</th>
+                    <th>Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                        Nenhuma transação registrada ainda.
+                      </td>
+                    </tr>
+                  ) : (
+                    transactions.map((tx) => {
+                      const isPositive = tx.amount > 0;
+                      const typeMap: Record<string, { text: string; class: string }> = {
+                        deposit: { text: 'Depósito', class: 'success' },
+                        order: { text: 'Pedido SMM', class: 'processing' },
+                        refund: { text: 'Estorno', class: 'success' },
+                        bonus: { text: 'Bônus', class: 'success' }
+                      };
+                      const typeInfo = typeMap[tx.type] || { text: tx.type, class: 'pending' };
+
+                      return (
+                        <tr key={tx.id}>
+                          <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                            {new Date(tx.createdAt).toLocaleString('pt-BR')}
+                          </td>
+                          <td>
+                            <span className={`badge ${typeInfo.class}`} style={{ padding: '4px 8px', fontSize: '11px' }}>
+                              {typeInfo.text}
+                            </span>
+                          </td>
+                          <td style={{ fontWeight: '500' }}>{tx.description}</td>
+                          <td style={{ color: isPositive ? 'var(--success)' : 'var(--error)', fontWeight: 'bold' }}>
+                            {isPositive ? '+' : ''} R$ {tx.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'suporte' && (
+          <div className="panel-card">
+            <div className="panel-header secondary">
+              <div className="panel-header-icon">💬</div>
+              <div className="panel-header-info">
+                <h2>Suporte & Tickets</h2>
+                <p>Abra um ticket ou converse diretamente com nossa equipe de suporte</p>
+              </div>
+            </div>
+
+            {selectedTicketId === null ? (
+              <div className="content-split" style={{ marginTop: '20px' }}>
+                {/* Criar Ticket */}
+                <div className="panel-card" style={{ padding: '0', background: 'transparent', border: 'none', boxShadow: 'none' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--primary)' }}>Abrir Novo Chamado</h3>
+                  <form onSubmit={handleCreateTicket} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <label className="form-label">Assunto</label>
+                      <input 
+                        type="text" 
+                        className="form-input" 
+                        placeholder="Ex: Dúvida sobre pedido, Problema com Pix..." 
+                        value={ticketSubject}
+                        onChange={(e) => setTicketSubject(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">Mensagem detalhada</label>
+                      <textarea 
+                        className="form-input" 
+                        rows={5} 
+                        placeholder="Descreva seu problema ou dúvida com o máximo de detalhes possível..." 
+                        value={ticketMessage}
+                        onChange={(e) => setTicketMessage(e.target.value)}
+                        required
+                        style={{ resize: 'vertical' }}
+                      />
+                    </div>
+                    <button type="submit" className="payment-btn" style={{ margin: '0' }}>
+                      Criar Ticket
+                    </button>
+                  </form>
+                </div>
+
+                {/* Meus Tickets */}
+                <div className="panel-card" style={{ padding: '0', background: 'transparent', border: 'none', boxShadow: 'none' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--primary)' }}>Seus Chamados</h3>
+                  <div className="services-table-wrapper">
+                    <table className="smm-table">
+                      <thead>
+                        <tr>
+                          <th>Assunto</th>
+                          <th>Status</th>
+                          <th>Opções</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tickets.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                              Nenhum ticket aberto ainda.
+                            </td>
+                          </tr>
+                        ) : (
+                          tickets.map((t) => {
+                            const statusMap = {
+                              aberto: { text: 'Aberto', class: 'pending' },
+                              respondido: { text: 'Respondido', class: 'success' },
+                              fechado: { text: 'Fechado', class: 'disabled' }
+                            };
+                            const statusInfo = statusMap[t.status] || { text: t.status, class: 'pending' };
+
+                            return (
+                              <tr key={t.id}>
+                                <td style={{ fontWeight: '500' }}>
+                                  {t.subject}
+                                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                    {new Date(t.createdAt).toLocaleDateString('pt-BR')}
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`badge ${statusInfo.class}`} style={{ padding: '4px 8px', fontSize: '11px' }}>
+                                    {statusInfo.text}
+                                  </span>
+                                </td>
+                                <td>
+                                  <button 
+                                    className="copy-btn" 
+                                    style={{ margin: '0', padding: '6px 12px', fontSize: '12px' }}
+                                    onClick={() => setSelectedTicketId(t.id)}
+                                  >
+                                    Ver Conversa
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              // Chat Thread view
+              <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {(() => {
+                  const currentTicket = tickets.find(t => t.id === selectedTicketId);
+                  if (!currentTicket) {
+                    return (
+                      <div>
+                        <p>Ticket não encontrado.</p>
+                        <button className="copy-btn" onClick={() => setSelectedTicketId(null)}>Voltar</button>
+                      </div>
+                    );
+                  }
+
+                  const statusMap = {
+                    aberto: { text: 'Aberto', class: 'pending' },
+                    respondido: { text: 'Respondido', class: 'success' },
+                    fechado: { text: 'Fechado', class: 'disabled' }
+                  };
+                  const statusInfo = statusMap[currentTicket.status] || { text: currentTicket.status, class: 'pending' };
+
+                  return (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                        <div>
+                          <button 
+                            className="copy-btn" 
+                            style={{ margin: '0 12px 0 0', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                            onClick={() => setSelectedTicketId(null)}
+                          >
+                            ← Voltar
+                          </button>
+                          <h3 style={{ display: 'inline-block', fontSize: '18px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                            {currentTicket.subject}
+                          </h3>
+                          <span className={`badge ${statusInfo.class}`} style={{ marginLeft: '12px', padding: '4px 8px', fontSize: '11px' }}>
+                            {statusInfo.text}
+                          </span>
+                        </div>
+                        {currentTicket.status !== 'fechado' && (
+                          <button 
+                            className="copy-btn" 
+                            style={{ margin: 0, padding: '6px 12px', borderColor: 'var(--error)', color: 'var(--error)' }}
+                            onClick={() => handleCloseTicket(currentTicket.id)}
+                          >
+                            Encerrar Ticket
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Chat Messages scroll area */}
+                      <div style={{ 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        gap: '12px', 
+                        maxHeight: '400px', 
+                        overflowY: 'auto', 
+                        padding: '16px', 
+                        borderRadius: '12px', 
+                        backgroundColor: 'var(--bg-tertiary)',
+                        border: '1px solid var(--border-color)' 
+                      }}>
+                        {selectedTicketMessages.length === 0 ? (
+                          <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Nenhuma mensagem.</p>
+                        ) : (
+                          selectedTicketMessages.map((msg) => {
+                            const isAdmin = msg.sender === 'admin';
+                            return (
+                              <div 
+                                key={msg.id} 
+                                style={{ 
+                                  alignSelf: isAdmin ? 'flex-start' : 'flex-end',
+                                  maxWidth: '75%',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: isAdmin ? 'flex-start' : 'flex-end'
+                                }}
+                              >
+                                <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', padding: '0 4px' }}>
+                                  {isAdmin ? '📌 Equipe Goobox' : 'Você'}
+                                </span>
+                                <div style={{ 
+                                  padding: '12px 16px', 
+                                  borderRadius: '16px', 
+                                  borderTopLeftRadius: isAdmin ? '4px' : '16px',
+                                  borderTopRightRadius: isAdmin ? '16px' : '4px',
+                                  backgroundColor: isAdmin ? 'var(--bg-card)' : 'var(--primary)',
+                                  color: isAdmin ? 'var(--text-primary)' : 'white',
+                                  border: isAdmin ? '1px solid var(--border-color)' : 'none',
+                                  fontSize: '14px',
+                                  lineHeight: '1.5',
+                                  wordBreak: 'break-word'
+                                }}>
+                                  {msg.message}
+                                </div>
+                                <span style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px', padding: '0 4px' }}>
+                                  {new Date(msg.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Reply Form */}
+                      {currentTicket.status === 'fechado' ? (
+                        <div className="payment-status-banner pending" style={{ margin: 0, textAlign: 'center' }}>
+                          Este chamado está encerrado. Se precisar de mais ajuda, por favor abra um novo chamado.
+                        </div>
+                      ) : (
+                        <form onSubmit={handleSendReply} style={{ display: 'flex', gap: '12px' }}>
+                          <input 
+                            type="text" 
+                            className="form-input" 
+                            placeholder="Digite sua resposta..." 
+                            value={ticketReply}
+                            onChange={(e) => setTicketReply(e.target.value)}
+                            required
+                            style={{ flexGrow: 1 }}
+                          />
+                          <button type="submit" className="payment-btn" style={{ margin: 0, padding: '0 24px', flexShrink: 0 }}>
+                            Enviar
+                          </button>
+                        </form>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'api' && (
           <div className="panel-card">
             <div className="panel-header secondary">
@@ -1746,332 +2560,579 @@ export default function Dashboard() {
 
         {activeTab === 'admin' && user?.role === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Metrics cards grid */}
-            <div className="widgets-grid" style={{ marginBottom: '0px' }}>
-              <div className="widget-card">
-                <div className="widget-icon" style={{ color: 'var(--primary)', backgroundColor: 'rgba(108, 37, 226, 0.15)' }}>💸</div>
-                <div className="widget-info">
-                  <span className="widget-title">Faturamento Pix (Total)</span>
-                  <span className="widget-value">R$ {adminMetrics?.totalBilling.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</span>
-                  <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Últimos 30 dias: R$ {adminMetrics?.monthlyBilling.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</small>
-                </div>
-              </div>
-
-              <div className="widget-card">
-                <div className="widget-icon" style={{ color: 'var(--success)', backgroundColor: 'rgba(0, 191, 165, 0.15)' }}>📈</div>
-                <div className="widget-info">
-                  <span className="widget-title">Lucro Estimado</span>
-                  <span className="widget-value" style={{ color: 'var(--success)' }}>R$ {adminMetrics?.estimatedProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</span>
-                  <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Calculado sobre markup global</small>
-                </div>
-              </div>
-
-              <div className="widget-card">
-                <div className="widget-icon" style={{ color: '#ff9800', backgroundColor: 'rgba(255, 152, 0, 0.15)' }}>📦</div>
-                <div className="widget-info">
-                  <span className="widget-title">Total de Pedidos SMM</span>
-                  <span className="widget-value">{adminMetrics?.totalOrders || 0}</span>
-                  <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Realizados no painel</small>
-                </div>
-              </div>
-
-              <div className="widget-card">
-                <div className="widget-icon" style={{ color: '#ffd700', backgroundColor: 'rgba(255, 215, 0, 0.15)' }}>👥</div>
-                <div className="widget-info">
-                  <span className="widget-title">Total de Clientes</span>
-                  <span className="widget-value">{adminMetrics?.totalUsers || 0}</span>
-                  <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Cadastrados na base</small>
-                </div>
-              </div>
+            {/* Admin Sub-Tabs Navigation */}
+            <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', flexWrap: 'wrap' }}>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'geral' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'geral' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'geral' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => setAdminTab('geral')}
+              >
+                ⚙️ Configuração Geral
+              </button>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'usuarios' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'usuarios' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'usuarios' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => setAdminTab('usuarios')}
+              >
+                👥 Usuários ({adminUsers.length})
+              </button>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'servicos' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'servicos' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'servicos' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => setAdminTab('servicos')}
+              >
+                🛠️ Serviços SMM ({services.length})
+              </button>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'pedidos' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'pedidos' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'pedidos' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => setAdminTab('pedidos')}
+              >
+                📦 Gerenciar Pedidos ({adminOrders.length})
+              </button>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'cupons' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'cupons' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'cupons' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => setAdminTab('cupons')}
+              >
+                🎁 Cupons Promocionais ({adminCoupons.length})
+              </button>
+              <button 
+                type="button"
+                className="copy-btn"
+                style={{ 
+                  margin: 0, 
+                  padding: '8px 16px', 
+                  borderRadius: '8px',
+                  background: adminTab === 'suporte' ? 'var(--primary)' : 'transparent',
+                  color: adminTab === 'suporte' ? 'white' : 'var(--text-secondary)',
+                  border: adminTab === 'suporte' ? '1px solid var(--primary)' : '1px solid var(--border-color)'
+                }}
+                onClick={() => { setAdminTab('suporte'); setSelectedTicketId(null); }}
+              >
+                💬 Tickets de Suporte ({tickets.filter(t => t.status === 'aberto').length} abertos)
+              </button>
             </div>
 
-            <div className="content-split">
-              {/* Global settings card */}
-              <div className="panel-card">
-                <div className="panel-header">
-                  <div className="panel-header-icon">⚙️</div>
-                  <div className="panel-header-info">
-                    <h2>Configurações do Painel</h2>
-                    <p>Defina o markup de lucro e informações de contato do suporte</p>
+            {/* Sub-Tab: Geral */}
+            {adminTab === 'geral' && (
+              <>
+                {/* Metrics cards grid */}
+                <div className="widgets-grid" style={{ marginBottom: '0px' }}>
+                  <div className="widget-card">
+                    <div className="widget-icon" style={{ color: 'var(--primary)', backgroundColor: 'rgba(108, 37, 226, 0.15)' }}>💸</div>
+                    <div className="widget-info">
+                      <span className="widget-title">Faturamento Pix (Total)</span>
+                      <span className="widget-value">R$ {adminMetrics?.totalBilling.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</span>
+                      <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Últimos 30 dias: R$ {adminMetrics?.monthlyBilling.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</small>
+                    </div>
+                  </div>
+
+                  <div className="widget-card">
+                    <div className="widget-icon" style={{ color: 'var(--success)', backgroundColor: 'rgba(0, 191, 165, 0.15)' }}>📈</div>
+                    <div className="widget-info">
+                      <span className="widget-title">Lucro Estimado</span>
+                      <span className="widget-value" style={{ color: 'var(--success)' }}>R$ {adminMetrics?.estimatedProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</span>
+                      <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Calculado sobre markup global</small>
+                    </div>
+                  </div>
+
+                  <div className="widget-card">
+                    <div className="widget-icon" style={{ color: '#ff9800', backgroundColor: 'rgba(255, 152, 0, 0.15)' }}>📦</div>
+                    <div className="widget-info">
+                      <span className="widget-title">Total de Pedidos SMM</span>
+                      <span className="widget-value">{adminMetrics?.totalOrders || 0}</span>
+                      <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Realizados no painel</small>
+                    </div>
+                  </div>
+
+                  <div className="widget-card">
+                    <div className="widget-icon" style={{ color: '#ffd700', backgroundColor: 'rgba(255, 215, 0, 0.15)' }}>👥</div>
+                    <div className="widget-info">
+                      <span className="widget-title">Total de Clientes</span>
+                      <span className="widget-value">{adminMetrics?.totalUsers || 0}</span>
+                      <small style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Cadastrados na base</small>
+                    </div>
                   </div>
                 </div>
 
-                {adminFeedback && (adminFeedback.message.includes('Configurações') || adminFeedback.message.includes('lucro') || adminFeedback.message.includes('WhatsApp') || adminFeedback.message.includes('margem')) && (
-                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                <div className="content-split">
+                  {/* Global settings card */}
+                  <div className="panel-card">
+                    <div className="panel-header">
+                      <div className="panel-header-icon">⚙️</div>
+                      <div className="panel-header-info">
+                        <h2>Configurações do Painel</h2>
+                        <p>Defina o markup de lucro e informações de contato do suporte</p>
+                      </div>
+                    </div>
+
+                    {adminFeedback && (adminFeedback.message.includes('Configurações') || adminFeedback.message.includes('lucro') || adminFeedback.message.includes('WhatsApp') || adminFeedback.message.includes('margem') || adminFeedback.message.includes('Aviso') || adminFeedback.message.includes('tipo')) && (
+                      <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                        {adminFeedback.message}
+                      </div>
+                    )}
+
+                    <form onSubmit={handleUpdateSettings}>
+                      <div className="form-group">
+                        <label className="form-label">Markup Global (%)</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          style={{ fontSize: '18px', fontWeight: 'bold' }}
+                          value={markupPercent}
+                          onChange={(e) => setMarkupPercent(parseFloat(e.target.value) || 0)}
+                          min="0"
+                          max="500"
+                          step="1"
+                          required
+                        />
+                        <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                          Exemplo: 20% de markup transformará um custo de fornecedor de R$ 5,00 em R$ 6,00 para os clientes.
+                        </small>
+                      </div>
+
+                      <div className="form-group" style={{ marginTop: '16px' }}>
+                        <label className="form-label">WhatsApp de Suporte (DDI + DDD + Número)</label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          style={{ fontSize: '18px', fontWeight: 'bold', fontFamily: 'monospace' }}
+                          value={whatsappNumber}
+                          onChange={(e) => setWhatsappNumber(e.target.value)}
+                          placeholder="Ex: 5511999999999"
+                          required
+                        />
+                      </div>
+
+                      <div className="form-group" style={{ marginTop: '16px' }}>
+                        <label className="form-label">Aviso Global (Mural de Avisos)</label>
+                        <textarea
+                          className="form-input"
+                          style={{ fontSize: '14px', fontFamily: 'inherit', height: '80px', resize: 'vertical', padding: '12px' }}
+                          value={announcementText}
+                          onChange={(e) => setAnnouncementText(e.target.value)}
+                          placeholder="Escreva um aviso para exibir no topo do painel dos clientes (deixe em branco para ocultar)"
+                        />
+                      </div>
+
+                      <div className="form-group" style={{ marginTop: '16px' }}>
+                        <label className="form-label">Tipo de Aviso</label>
+                        <select
+                          className="form-select"
+                          value={announcementType}
+                          onChange={(e) => setAnnouncementType(e.target.value as any)}
+                        >
+                          <option value="info">📢 Informativo (Roxo)</option>
+                          <option value="warning">⚠️ Alerta (Laranja)</option>
+                          <option value="success">✓ Sucesso (Verde)</option>
+                        </select>
+                      </div>
+
+                      <button type="submit" className="submit-btn" style={{ marginTop: '20px' }} disabled={isSavingMarkup}>
+                        {isSavingMarkup ? 'Salvando...' : 'Salvar Configurações'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Quick balance adjustment card */}
+                  <div className="panel-card">
+                    <div className="panel-header secondary">
+                      <div className="panel-header-icon" style={{ backgroundColor: 'rgba(0, 191, 165, 0.15)', color: 'var(--success)' }}>💰</div>
+                      <div className="panel-header-info">
+                        <h2>Adicionar / Retirar Saldo</h2>
+                        <p>Ajuste o saldo de qualquer usuário na plataforma</p>
+                      </div>
+                    </div>
+
+                    {adminFeedback && adminFeedback.message.includes('Saldo') && (
+                      <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                        {adminFeedback.message}
+                      </div>
+                    )}
+
+                    <form onSubmit={handleAdjustBalance}>
+                      <div className="form-group">
+                        <label className="form-label">Selecionar Usuário</label>
+                        <select
+                          className="form-select"
+                          value={adjustingUserEmail}
+                          onChange={(e) => setAdjustingUserEmail(e.target.value)}
+                          required
+                        >
+                          <option value="">Selecione um usuário...</option>
+                          {adminUsers.map((u) => (
+                            <option key={u.email} value={u.email}>
+                              {u.name} ({u.email}) - Saldo: R$ {u.balance.toFixed(2)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Valor do Ajuste (BRL)</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          style={{ fontFamily: 'monospace' }}
+                          value={adjustmentAmount}
+                          onChange={(e) => setAdjustmentAmount(e.target.value)}
+                          placeholder="Ex: 50.00 ou -20.00"
+                          step="0.01"
+                          required
+                        />
+                        <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                          Valores positivos adicionam saldo. Valores negativos subtraem saldo.
+                        </small>
+                      </div>
+
+                      <button type="submit" className="submit-btn" style={{ background: 'linear-gradient(135deg, var(--success) 0%, #00897b 100%)', boxShadow: '0 4px 15px rgba(0, 191, 165, 0.2)' }} disabled={isAdjustingBalance || !adjustingUserEmail}>
+                        {isAdjustingBalance ? 'Processando...' : 'Aplicar Ajuste de Saldo'}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Sub-Tab: Usuarios */}
+            {adminTab === 'usuarios' && (
+              <>
+                <div className="content-split">
+                  {/* Create User Card */}
+                  <div className="panel-card">
+                    <div className="panel-header secondary">
+                      <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>👤</div>
+                      <div className="panel-header-info">
+                        <h2>Cadastrar Novo Usuário</h2>
+                        <p>Crie um novo cliente ou administrador no sistema</p>
+                      </div>
+                    </div>
+
+                    {adminFeedback && adminFeedback.message.includes('cadastrado') && (
+                      <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
+                        {adminFeedback.message}
+                      </div>
+                    )}
+
+                    <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div className="form-group">
+                          <label className="form-label">Nome Completo</label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            value={createName}
+                            onChange={(e) => setCreateName(e.target.value)}
+                            placeholder="Ex: João Silva"
+                            required
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">E-mail</label>
+                          <input
+                            type="email"
+                            className="form-input"
+                            value={createEmail}
+                            onChange={(e) => setCreateEmail(e.target.value)}
+                            placeholder="Ex: joao@gmail.com"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div className="form-group">
+                          <label className="form-label">Senha</label>
+                          <input
+                            type="password"
+                            className="form-input"
+                            value={createPassword}
+                            onChange={(e) => setCreatePassword(e.target.value)}
+                            placeholder="Min 6 caracteres"
+                            required
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Saldo Inicial (BRL)</label>
+                          <input
+                            type="number"
+                            className="form-input"
+                            value={createBalance}
+                            onChange={(e) => setCreateBalance(e.target.value)}
+                            placeholder="Ex: 50.00"
+                            step="0.01"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Função / Tipo de Conta</label>
+                        <select
+                          className="form-select"
+                          value={createRole}
+                          onChange={(e) => setCreateRole(e.target.value)}
+                          required
+                        >
+                          <option value="user">Cliente Comum (user)</option>
+                          <option value="admin">Administrador (admin)</option>
+                        </select>
+                      </div>
+
+                      <button type="submit" className="submit-btn" style={{ marginTop: '6px' }} disabled={isCreatingUser}>
+                        {isCreatingUser ? 'Criando Conta...' : 'Cadastrar Usuário'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Admin Quick Guide Card */}
+                  <div className="panel-card">
+                    <div className="panel-header secondary">
+                      <div className="panel-header-icon" style={{ backgroundColor: 'rgba(255, 215, 0, 0.15)', color: '#ffd700' }}>💡</div>
+                      <div className="panel-header-info">
+                        <h2>Guia de Administração</h2>
+                        <p>Dicas rápidas para gerenciar seu painel SMM</p>
+                      </div>
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '16px', lineHeight: 1.5 }}>
+                      <p>🔹 <strong>Markup dos Serviços:</strong> A porcentagem configurada calcula automaticamente a diferença entre o custo base do provedor e o preço cobrado dos seus clientes.</p>
+                      <p>🔹 <strong>Exclusão de Contas:</strong> Ao excluir um usuário, todos os dados associados a ele no Supabase são removidos permanentemente. O admin principal não pode ser excluído.</p>
+                      <p>🔹 <strong>Faturamento Real:</strong> Os valores de faturamento exibidos no painel refletem apenas as recargas Pix que foram de fato concluídas e pagas via Mercado Pago.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Users table card */}
+                <div className="panel-card">
+                  <div className="panel-header secondary">
+                    <div className="panel-header-icon">👥</div>
+                    <div className="panel-header-info">
+                      <h2>Usuários Cadastrados</h2>
+                      <p>Visualize e administre as contas e dados de uso dos clientes</p>
+                    </div>
+                  </div>
+
+                  {adminLoading ? (
+                    <p style={{ color: 'var(--text-secondary)', padding: '24px', textAlign: 'center' }}>Buscando dados de usuários...</p>
+                  ) : (
+                    <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+                      <table className="smm-table">
+                        <thead>
+                          <tr>
+                            <th>Nome</th>
+                            <th>E-mail</th>
+                            <th>Status</th>
+                            <th>Função</th>
+                            <th>Saldo</th>
+                            <th>Pedidos Realizados</th>
+                            <th>Total Gasto</th>
+                            <th style={{ textAlign: 'center' }}>Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminUsers.length === 0 ? (
+                            <tr>
+                              <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                                Nenhum usuário cadastrado.
+                              </td>
+                            </tr>
+                          ) : (
+                            adminUsers.map((u) => (
+                              <tr key={u.email}>
+                                <td style={{ fontWeight: '600' }}>{u.name}</td>
+                                <td>{u.email}</td>
+                                <td>
+                                  <span className="badge processing" style={{ textTransform: 'capitalize' }}>{u.status}</span>
+                                </td>
+                                <td>
+                                  <span className="badge" style={{ 
+                                    backgroundColor: u.role === 'admin' ? 'rgba(255, 51, 102, 0.15)' : 'rgba(108, 37, 226, 0.15)',
+                                    color: u.role === 'admin' ? 'var(--error)' : 'var(--primary)'
+                                  }}>
+                                    {u.role === 'admin' ? 'Administrador' : 'Cliente'}
+                                  </span>
+                                </td>
+                                <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
+                                  R$ {u.balance.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}
+                                </td>
+                                <td>{u.totalOrders}</td>
+                                <td>R$ {u.totalSpent.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                <td style={{ textAlign: 'center' }}>
+                                  {u.email.toLowerCase() !== 'admin@goobox.com' && u.email.toLowerCase() !== user?.email.toLowerCase() ? (
+                                    <button
+                                      type="button"
+                                      className="delete-user-btn"
+                                      onClick={() => handleDeleteUser(u.email)}
+                                    >
+                                      Excluir
+                                    </button>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: '11px', fontStyle: 'italic' }}>Ativo (Principal)</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Sub-Tab: Servicos */}
+            {adminTab === 'servicos' && (
+              <div className="panel-card">
+                <div className="panel-header secondary" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="panel-header-icon" style={{ backgroundColor: 'rgba(0, 191, 165, 0.15)', color: 'var(--success)' }}>🛠️</div>
+                    <div className="panel-header-info">
+                      <h2>Gerenciamento de Serviços SMM</h2>
+                      <p>Adicione, edite, exclua ou sincronize serviços do painel</p>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button 
+                      type="button"
+                      className="submit-btn" 
+                      style={{ margin: 0, padding: '8px 16px', background: 'linear-gradient(135deg, var(--primary) 0%, #512da8 100%)', width: 'auto' }}
+                      onClick={() => handleOpenServiceModal('create')}
+                    >
+                      + Novo Serviço
+                    </button>
+                    <button 
+                      type="button"
+                      className="submit-btn" 
+                      style={{ margin: 0, padding: '8px 16px', background: 'linear-gradient(135deg, var(--success) 0%, #00897b 100%)', width: 'auto' }}
+                      onClick={handleSyncServices}
+                      disabled={isSyncingServices}
+                    >
+                      {isSyncingServices ? 'Sincronizando...' : '🔄 Sincronizar Provedor'}
+                    </button>
+                  </div>
+                </div>
+
+                {adminFeedback && adminFeedback.message.includes('serviço') && (
+                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px' }}>
                     {adminFeedback.message}
                   </div>
                 )}
 
-                <form onSubmit={handleUpdateSettings}>
+                {/* Filters */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '20px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label className="form-label">Markup Global (%)</label>
-                    <input
-                      type="number"
-                      className="form-input"
-                      style={{ fontSize: '18px', fontWeight: 'bold' }}
-                      value={markupPercent}
-                      onChange={(e) => setMarkupPercent(parseFloat(e.target.value) || 0)}
-                      min="0"
-                      max="500"
-                      step="1"
-                      required
-                    />
-                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Exemplo: 20% de markup transformará um custo de fornecedor de R$ 5,00 em R$ 6,00 para os clientes.
-                    </small>
-                  </div>
-
-                  <div className="form-group" style={{ marginTop: '16px' }}>
-                    <label className="form-label">WhatsApp de Suporte (DDI + DDD + Número)</label>
+                    <label className="form-label" style={{ marginBottom: '6px' }}>Buscar por Nome ou ID</label>
                     <input
                       type="text"
                       className="form-input"
-                      style={{ fontSize: '18px', fontWeight: 'bold', fontFamily: 'monospace' }}
-                      value={whatsappNumber}
-                      onChange={(e) => setWhatsappNumber(e.target.value)}
-                      placeholder="Ex: 5511999999999"
-                      required
+                      placeholder="Ex: Instagram Seguidores..."
+                      value={adminServiceSearch}
+                      onChange={(e) => setAdminServiceSearch(e.target.value)}
                     />
-                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Insira o número completo com DDI (55 para Brasil) e DDD, sem espaços ou traços.
-                    </small>
                   </div>
-
-                  <button type="submit" className="submit-btn" style={{ marginTop: '16px' }} disabled={isSavingMarkup}>
-                    {isSavingMarkup ? 'Salvando...' : 'Salvar Configurações'}
-                  </button>
-                </form>
-              </div>
-
-              {/* Quick balance adjustment card */}
-              <div className="panel-card">
-                <div className="panel-header secondary">
-                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(0, 191, 165, 0.15)', color: 'var(--success)' }}>💰</div>
-                  <div className="panel-header-info">
-                    <h2>Adicionar / Retirar Saldo</h2>
-                    <p>Ajuste o saldo de qualquer usuário na plataforma</p>
-                  </div>
-                </div>
-
-                {adminFeedback && adminFeedback.message.includes('Saldo') && (
-                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
-                    {adminFeedback.message}
-                  </div>
-                )}
-
-                <form onSubmit={handleAdjustBalance}>
                   <div className="form-group">
-                    <label className="form-label">Selecionar Usuário</label>
+                    <label className="form-label" style={{ marginBottom: '6px' }}>Filtrar por Categoria</label>
                     <select
                       className="form-select"
-                      value={adjustingUserEmail}
-                      onChange={(e) => setAdjustingUserEmail(e.target.value)}
-                      required
+                      value={adminServiceCategoryFilter}
+                      onChange={(e) => setAdminServiceCategoryFilter(e.target.value)}
                     >
-                      <option value="">Selecione um usuário...</option>
-                      {adminUsers.map((u) => (
-                        <option key={u.email} value={u.email}>
-                          {u.name} ({u.email}) - Saldo: R$ {u.balance.toFixed(2)}
-                        </option>
+                      <option value="">Todas as categorias</option>
+                      {Array.from(new Set(services.map(s => s.category))).map((cat, idx) => (
+                        <option key={idx} value={cat}>{cat}</option>
                       ))}
                     </select>
                   </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Valor do Ajuste (BRL)</label>
-                    <input
-                      type="number"
-                      className="form-input"
-                      style={{ fontFamily: 'monospace' }}
-                      value={adjustmentAmount}
-                      onChange={(e) => setAdjustmentAmount(e.target.value)}
-                      placeholder="Ex: 50.00 ou -20.00"
-                      step="0.01"
-                      required
-                    />
-                    <small style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      Valores positivos adicionam saldo. Valores negativos subtraem saldo.
-                    </small>
-                  </div>
-
-                  <button type="submit" className="submit-btn" style={{ background: 'linear-gradient(135deg, var(--success) 0%, #00897b 100%)', boxShadow: '0 4px 15px rgba(0, 191, 165, 0.2)' }} disabled={isAdjustingBalance || !adjustingUserEmail}>
-                    {isAdjustingBalance ? 'Processando...' : 'Aplicar Ajuste de Saldo'}
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            <div className="content-split">
-              {/* Create User Card */}
-              <div className="panel-card">
-                <div className="panel-header secondary">
-                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>👤</div>
-                  <div className="panel-header-info">
-                    <h2>Cadastrar Novo Usuário</h2>
-                    <p>Crie um novo cliente ou administrador no sistema</p>
-                  </div>
                 </div>
 
-                {adminFeedback && adminFeedback.message.includes('cadastrado') && (
-                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px' }}>
-                    {adminFeedback.message}
-                  </div>
-                )}
-
-                <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div className="form-group">
-                      <label className="form-label">Nome Completo</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        value={createName}
-                        onChange={(e) => setCreateName(e.target.value)}
-                        placeholder="Ex: João Silva"
-                        required
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">E-mail</label>
-                      <input
-                        type="email"
-                        className="form-input"
-                        value={createEmail}
-                        onChange={(e) => setCreateEmail(e.target.value)}
-                        placeholder="Ex: joao@gmail.com"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div className="form-group">
-                      <label className="form-label">Senha</label>
-                      <input
-                        type="password"
-                        className="form-input"
-                        value={createPassword}
-                        onChange={(e) => setCreatePassword(e.target.value)}
-                        placeholder="Min 6 caracteres"
-                        required
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Saldo Inicial (BRL)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        value={createBalance}
-                        onChange={(e) => setCreateBalance(e.target.value)}
-                        placeholder="Ex: 50.00"
-                        step="0.01"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Função / Tipo de Conta</label>
-                    <select
-                      className="form-select"
-                      value={createRole}
-                      onChange={(e) => setCreateRole(e.target.value)}
-                      required
-                    >
-                      <option value="user">Cliente Comum (user)</option>
-                      <option value="admin">Administrador (admin)</option>
-                    </select>
-                  </div>
-
-                  <button type="submit" className="submit-btn" style={{ marginTop: '6px' }} disabled={isCreatingUser}>
-                    {isCreatingUser ? 'Criando Conta...' : 'Cadastrar Usuário'}
-                  </button>
-                </form>
-              </div>
-
-              {/* Admin Quick Guide Card */}
-              <div className="panel-card">
-                <div className="panel-header secondary">
-                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(255, 215, 0, 0.15)', color: '#ffd700' }}>💡</div>
-                  <div className="panel-header-info">
-                    <h2>Guia de Administração</h2>
-                    <p>Dicas rápidas para gerenciar seu painel SMM</p>
-                  </div>
-                </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '16px', lineHeight: 1.5 }}>
-                  <p>🔹 <strong>Markup dos Serviços:</strong> A porcentagem configurada calcula automaticamente a diferença entre o custo base do provedor e o preço cobrado dos seus clientes.</p>
-                  <p>🔹 <strong>Exclusão de Contas:</strong> Ao excluir um usuário, todos os dados associados a ele no Supabase são removidos permanentemente. O admin principal não pode ser excluído.</p>
-                  <p>🔹 <strong>Faturamento Real:</strong> Os valores de faturamento exibidos no painel refletem apenas as recargas Pix que foram de fato concluídas e pagas via Mercado Pago.</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Users table card */}
-            <div className="panel-card">
-              <div className="panel-header secondary">
-                <div className="panel-header-icon">👥</div>
-                <div className="panel-header-info">
-                  <h2>Usuários Cadastrados</h2>
-                  <p>Visualize e administre as contas e dados de uso dos clientes</p>
-                </div>
-              </div>
-
-              {adminLoading ? (
-                <p style={{ color: 'var(--text-secondary)', padding: '24px', textAlign: 'center' }}>Buscando dados de usuários...</p>
-              ) : (
-                <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+                <div className="services-table-wrapper" style={{ marginTop: '12px' }}>
                   <table className="smm-table">
                     <thead>
                       <tr>
+                        <th>ID</th>
+                        <th>Categoria</th>
                         <th>Nome</th>
-                        <th>E-mail</th>
-                        <th>Status</th>
-                        <th>Função</th>
-                        <th>Saldo</th>
-                        <th>Pedidos Realizados</th>
-                        <th>Total Gasto</th>
+                        <th>Preço por 1000</th>
+                        <th>Mín / Máx</th>
                         <th style={{ textAlign: 'center' }}>Ações</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {adminUsers.length === 0 ? (
+                      {filteredAdminServices.length === 0 ? (
                         <tr>
-                          <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
-                            Nenhum usuário cadastrado.
+                          <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                            Nenhum serviço correspondente encontrado.
                           </td>
                         </tr>
                       ) : (
-                        adminUsers.map((u) => (
-                          <tr key={u.email}>
-                            <td style={{ fontWeight: '600' }}>{u.name}</td>
-                            <td>{u.email}</td>
-                            <td>
-                              <span className="badge processing" style={{ textTransform: 'capitalize' }}>{u.status}</span>
-                            </td>
-                            <td>
-                              <span className="badge" style={{ 
-                                backgroundColor: u.role === 'admin' ? 'rgba(255, 51, 102, 0.15)' : 'rgba(108, 37, 226, 0.15)',
-                                color: u.role === 'admin' ? 'var(--error)' : 'var(--primary)'
-                              }}>
-                                {u.role === 'admin' ? 'Administrador' : 'Cliente'}
-                              </span>
-                            </td>
-                            <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
-                              R$ {u.balance.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}
-                            </td>
-                            <td>{u.totalOrders}</td>
-                            <td>R$ {u.totalSpent.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        filteredAdminServices.slice(0, 50).map((srv) => (
+                          <tr key={srv.id}>
+                            <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>#{srv.id}</td>
+                            <td><span className="badge processing" style={{ padding: '4px 8px', fontSize: '11px' }}>{srv.category}</span></td>
+                            <td style={{ fontWeight: '500', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={srv.name}>{srv.name}</td>
+                            <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>R$ {srv.ratePer1000.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</td>
+                            <td style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{srv.min} / {srv.max}</td>
                             <td style={{ textAlign: 'center' }}>
-                              {u.email.toLowerCase() !== 'admin@goobox.com' && u.email.toLowerCase() !== user?.email.toLowerCase() ? (
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                 <button
+                                  type="button"
+                                  className="copy-btn"
+                                  style={{ margin: 0, padding: '4px 10px', fontSize: '12px' }}
+                                  onClick={() => handleOpenServiceModal('edit', srv)}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
                                   className="delete-user-btn"
-                                  onClick={() => handleDeleteUser(u.email)}
+                                  style={{ margin: 0, padding: '4px 10px', fontSize: '12px' }}
+                                  onClick={() => handleDeleteService(srv.id)}
                                 >
                                   Excluir
                                 </button>
-                              ) : (
-                                <span style={{ color: 'var(--text-secondary)', fontSize: '11px', fontStyle: 'italic' }}>Ativo (Principal)</span>
-                              )}
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -2079,249 +3140,262 @@ export default function Dashboard() {
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
+                {filteredAdminServices.length > 50 && (
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '11px', textAlign: 'center', marginTop: '12px', fontStyle: 'italic' }}>
+                    Exibindo os primeiros 50 serviços de {filteredAdminServices.length}. Use a busca ou filtros para refinar.
+                  </p>
+                )}
+              </div>
+            )}
 
-            {/* Services Management Card */}
-            <div className="panel-card" style={{ marginTop: '24px' }}>
-              <div className="panel-header secondary" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(0, 191, 165, 0.15)', color: 'var(--success)' }}>🛠️</div>
-                  <div className="panel-header-info">
-                    <h2>Gerenciamento de Serviços SMM</h2>
-                    <p>Adicione, edite, exclua ou sincronize serviços do painel</p>
+            {/* Sub-Tab: Pedidos (Novo Recurso) */}
+            {adminTab === 'pedidos' && (
+              <div className="panel-card">
+                <div className="panel-header secondary" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>📦</div>
+                    <div className="panel-header-info">
+                      <h2>Gerenciamento de Pedidos SMM</h2>
+                      <p>Visualize todos os pedidos, atualize status ou realize reembolsos</p>
+                    </div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button 
-                    type="button"
-                    className="submit-btn" 
-                    style={{ margin: 0, padding: '8px 16px', background: 'linear-gradient(135deg, var(--primary) 0%, #512da8 100%)', width: 'auto' }}
-                    onClick={() => handleOpenServiceModal('create')}
-                  >
-                    + Novo Serviço
-                  </button>
-                  <button 
-                    type="button"
-                    className="submit-btn" 
-                    style={{ margin: 0, padding: '8px 16px', background: 'linear-gradient(135deg, var(--success) 0%, #00897b 100%)', width: 'auto' }}
-                    onClick={handleSyncServices}
-                    disabled={isSyncingServices}
-                  >
-                    {isSyncingServices ? 'Sincronizando...' : '🔄 Sincronizar Provedor'}
-                  </button>
-                </div>
-              </div>
 
-              {adminFeedback && adminFeedback.message.includes('serviço') && (
-                <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px' }}>
-                  {adminFeedback.message}
-                </div>
-              )}
+                {adminFeedback && (adminFeedback.message.includes('pedido') || adminFeedback.message.includes('Status') || adminFeedback.message.includes('Reembolsado') || adminFeedback.message.includes('Estorno')) && (
+                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px', marginBottom: '20px' }}>
+                    {adminFeedback.message}
+                  </div>
+                )}
 
-              {/* Filters */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '20px', marginBottom: '16px' }}>
-                <div className="form-group">
-                  <label className="form-label" style={{ marginBottom: '6px' }}>Buscar por Nome ou ID</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Ex: Instagram Seguidores..."
-                    value={adminServiceSearch}
-                    onChange={(e) => setAdminServiceSearch(e.target.value)}
-                  />
+                {/* Filters */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '20px', marginBottom: '16px' }}>
+                  <div className="form-group">
+                    <label className="form-label" style={{ marginBottom: '6px' }}>Buscar por ID, Email ou Link</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Ex: 58291, cliente@email.com..."
+                      value={adminOrdersSearch}
+                      onChange={(e) => setAdminOrdersSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" style={{ marginBottom: '6px' }}>Filtrar por Status</label>
+                    <select
+                      className="form-select"
+                      value={adminOrdersStatusFilter}
+                      onChange={(e) => setAdminOrdersStatusFilter(e.target.value)}
+                    >
+                      <option value="">Todos os status</option>
+                      <option value="Pendente">Pendente</option>
+                      <option value="Processando">Processando</option>
+                      <option value="Concluido">Concluido</option>
+                      <option value="Cancelado">Cancelado</option>
+                      <option value="Parcial">Parcial</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ marginBottom: '6px' }}>Filtrar por Categoria</label>
-                  <select
-                    className="form-select"
-                    value={adminServiceCategoryFilter}
-                    onChange={(e) => setAdminServiceCategoryFilter(e.target.value)}
-                  >
-                    <option value="">Todas as categorias</option>
-                    {Array.from(new Set(services.map(s => s.category))).map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
 
-              {/* Table */}
-              <div className="services-table-wrapper">
-                <table className="smm-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '80px' }}>ID</th>
-                      <th>Nome do Serviço</th>
-                      <th>Categoria</th>
-                      <th style={{ width: '120px' }}>Preço / 1000</th>
-                      <th style={{ width: '120px' }}>Min / Max</th>
-                      <th style={{ width: '150px', textAlign: 'center' }}>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAdminServices.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
-                          Nenhum serviço encontrado.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredAdminServices.slice(0, 50).map((srv) => (
-                        <tr key={srv.id}>
-                          <td style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{srv.id}</td>
-                          <td style={{ fontWeight: '500' }}>{srv.name}</td>
-                          <td>
-                            <span className="badge" style={{ backgroundColor: 'rgba(108, 37, 226, 0.12)', color: 'var(--primary)' }}>
-                              {srv.category}
-                            </span>
-                          </td>
-                          <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
-                            R$ {srv.ratePer1000.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                            {srv.min} / {srv.max}
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                              <button
-                                type="button"
-                                className="copy-btn"
-                                style={{ margin: 0, padding: '4px 10px', backgroundColor: 'var(--primary)', color: 'white', borderRadius: '6px', fontSize: '12px' }}
-                                onClick={() => handleOpenServiceModal('edit', srv)}
-                              >
-                                Editar
-                              </button>
-                              <button
-                                type="button"
-                                className="delete-user-btn"
-                                style={{ margin: 0, padding: '4px 10px', fontSize: '12px' }}
-                                onClick={() => handleDeleteService(srv.id)}
-                              >
-                                Excluir
-                              </button>
-                            </div>
-                          </td>
+                {/* Table */}
+                {adminOrdersLoading ? (
+                  <p style={{ color: 'var(--text-secondary)', padding: '24px', textAlign: 'center' }}>Carregando pedidos...</p>
+                ) : (
+                  <div className="services-table-wrapper" style={{ marginTop: '12px' }}>
+                    <table className="smm-table">
+                      <thead>
+                        <tr>
+                          <th>ID</th>
+                          <th>Cliente</th>
+                          <th>Serviço</th>
+                          <th>Quantidade</th>
+                          <th>Cobrado</th>
+                          <th>Status</th>
+                          <th>Data</th>
+                          <th style={{ textAlign: 'center' }}>Ações</th>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const filtered = adminOrders.filter(o => {
+                            const matchesSearch = o.id.toLowerCase().includes(adminOrdersSearch.toLowerCase()) ||
+                              (o.userEmail || '').toLowerCase().includes(adminOrdersSearch.toLowerCase()) ||
+                              o.link.toLowerCase().includes(adminOrdersSearch.toLowerCase());
+                            const matchesStatus = adminOrdersStatusFilter ? o.status === adminOrdersStatusFilter : true;
+                            return matchesSearch && matchesStatus;
+                          });
+
+                          if (filtered.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                                  Nenhum pedido correspondente encontrado.
+                                </td>
+                              </tr>
+                            );
+                          }
+
+                          return filtered.map((ord) => (
+                            <tr key={ord.id}>
+                              <td style={{ fontWeight: 'bold' }}>#{ord.id}</td>
+                              <td style={{ fontSize: '13px' }} title={ord.userEmail}>{ord.userEmail}</td>
+                              <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ord.serviceName}>
+                                {ord.serviceName}
+                              </td>
+                              <td>{ord.quantity}</td>
+                              <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>
+                                R$ {ord.charge.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}
+                              </td>
+                              <td>
+                                <span className={`badge ${ord.status === 'Concluido' ? 'success' : ord.status === 'Cancelado' ? 'error' : ord.status === 'Parcial' ? 'pending' : 'processing'}`}>
+                                  {ord.status}
+                                </span>
+                              </td>
+                              <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                {new Date(ord.createdAt).toLocaleString('pt-BR')}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
+                                  <select
+                                    className="form-select"
+                                    style={{ margin: 0, padding: '2px 6px', fontSize: '11px', width: 'auto' }}
+                                    value={ord.status}
+                                    onChange={(e) => handleAdminOrderAction(ord.id, 'update_status', e.target.value)}
+                                  >
+                                    <option value="Pendente">Pendente</option>
+                                    <option value="Processando">Processando</option>
+                                    <option value="Concluido">Concluido</option>
+                                    <option value="Cancelado">Cancelado</option>
+                                    <option value="Parcial">Parcial</option>
+                                  </select>
+                                  {ord.status !== 'Cancelado' && (
+                                    <button
+                                      className="copy-btn"
+                                      style={{ margin: 0, padding: '2px 6px', fontSize: '11px', borderColor: 'var(--error)', color: 'var(--error)' }}
+                                      onClick={() => {
+                                        if (confirm(`Deseja cancelar e estornar o pedido #${ord.id}?`)) {
+                                          handleAdminOrderAction(ord.id, 'refund');
+                                        }
+                                      }}
+                                    >
+                                      Estornar
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-              {filteredAdminServices.length > 50 && (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '11px', textAlign: 'center', marginTop: '12px', fontStyle: 'italic' }}>
-                  Exibindo os primeiros 50 serviços de {filteredAdminServices.length}. Use a busca ou filtros para refinar.
-                </p>
-              )}
-            </div>
+            )}
 
-            {/* Coupons Management Card */}
-            <div className="panel-card" style={{ marginTop: '24px' }}>
-              <div className="panel-header secondary">
-                <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>🎁</div>
-                <div className="panel-header-info">
-                  <h2>Gerenciamento de Cupons de Desconto</h2>
-                  <p>Crie cupons promocionais para bônus de recarga Pix ou resgate de saldo grátis</p>
+            {/* Sub-Tab: Cupons */}
+            {adminTab === 'cupons' && (
+              <div className="panel-card">
+                <div className="panel-header secondary">
+                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>🎁</div>
+                  <div className="panel-header-info">
+                    <h2>Cupons Promocionais</h2>
+                    <p>Crie códigos promocionais para os clientes ganharem bônus em depósitos ou resgatarem saldo grátis</p>
+                  </div>
                 </div>
-              </div>
 
-              {adminFeedback && adminFeedback.message.includes('cupom') && (
-                <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px' }}>
-                  {adminFeedback.message}
-                </div>
-              )}
+                {adminFeedback && (adminFeedback.message.includes('Cupom') || adminFeedback.message.includes('cupom')) && (
+                  <div className={`payment-status-banner ${adminFeedback.success ? 'approved' : 'pending'}`} style={{ marginTop: '20px', marginBottom: '20px' }}>
+                    {adminFeedback.message}
+                  </div>
+                )}
 
-              <div className="content-split" style={{ marginTop: '20px', gap: '20px' }}>
-                {/* Form to create coupon */}
-                <div style={{ flex: 1 }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '14px' }}>Criar Novo Cupom</h3>
-                  <form onSubmit={handleCreateCoupon} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="content-split" style={{ marginTop: '20px' }}>
+                  {/* Form to create coupon */}
+                  <div className="panel-card" style={{ padding: '0', background: 'transparent', border: 'none', boxShadow: 'none' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--primary)' }}>Criar Novo Cupom</h3>
+                    <form onSubmit={handleCreateCoupon} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       <div className="form-group">
-                        <label className="form-label">Código</label>
+                        <label className="form-label">Código do Cupom</label>
                         <input
                           type="text"
                           className="form-input"
-                          style={{ textTransform: 'uppercase', fontFamily: 'monospace' }}
+                          placeholder="EX: BOASVINDAS20"
                           value={createCouponCode}
                           onChange={(e) => setCreateCouponCode(e.target.value)}
-                          placeholder="Ex: NOVO10"
                           required
                         />
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Tipo de Desconto</label>
-                        <select
-                          className="form-select"
-                          value={createCouponType}
-                          onChange={(e) => setCreateCouponType(e.target.value as any)}
-                          required
-                        >
-                          <option value="percentage">Percentual (%)</option>
-                          <option value="fixed">Fixo (R$)</option>
-                        </select>
-                      </div>
-                    </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                      <div className="form-group">
-                        <label className="form-label">Valor Bônus</label>
-                        <input
-                          type="number"
-                          className="form-input"
-                          value={createCouponValue}
-                          onChange={(e) => setCreateCouponValue(e.target.value)}
-                          placeholder="Ex: 10 ou 5.00"
-                          step="0.01"
-                          required
-                        />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div className="form-group">
+                          <label className="form-label">Tipo de Desconto</label>
+                          <select
+                            className="form-select"
+                            value={createCouponType}
+                            onChange={(e) => setCreateCouponType(e.target.value as any)}
+                          >
+                            <option value="percentage">Porcentagem (%)</option>
+                            <option value="fixed">Fixo (R$)</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Valor</label>
+                          <input
+                            type="number"
+                            className="form-input"
+                            placeholder="Ex: 10 para 10% ou 5 para R$5"
+                            value={createCouponValue}
+                            onChange={(e) => setCreateCouponValue(e.target.value)}
+                            step="0.01"
+                            min="0.01"
+                            required
+                          />
+                        </div>
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Dep. Mínimo (R$)</label>
-                        <input
-                          type="number"
-                          className="form-input"
-                          value={createCouponMinDeposit}
-                          onChange={(e) => setCreateCouponMinDeposit(e.target.value)}
-                          placeholder="Ex: 50.00"
-                          step="0.01"
-                          required
-                        />
-                        <small style={{ color: 'var(--text-secondary)', fontSize: '9px' }}>Use 0.00 para saldo grátis</small>
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Limite Usos</label>
-                        <input
-                          type="number"
-                          className="form-input"
-                          value={createCouponMaxUses}
-                          onChange={(e) => setCreateCouponMaxUses(e.target.value)}
-                          placeholder="Ilimitado"
-                          min="1"
-                        />
-                      </div>
-                    </div>
 
-                    <button type="submit" className="submit-btn" style={{ marginTop: '6px' }} disabled={isCreatingCoupon}>
-                      {isCreatingCoupon ? 'Criando Cupom...' : 'Criar Cupom'}
-                    </button>
-                  </form>
-                </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div className="form-group">
+                          <label className="form-label">Depósito Mínimo (R$)</label>
+                          <input
+                            type="number"
+                            className="form-input"
+                            placeholder="Ex: 30.00"
+                            value={createCouponMinDeposit}
+                            onChange={(e) => setCreateCouponMinDeposit(e.target.value)}
+                            step="0.01"
+                            min="0"
+                            required
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Limite de Usos (Máx)</label>
+                          <input
+                            type="number"
+                            className="form-input"
+                            placeholder="Deixe em branco para ilimitado"
+                            value={createCouponMaxUses}
+                            onChange={(e) => setCreateCouponMaxUses(e.target.value)}
+                            min="1"
+                          />
+                        </div>
+                      </div>
 
-                {/* List of existing coupons */}
-                <div style={{ flex: 1.5 }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '14px' }}>Cupons Cadastrados</h3>
-                  {adminCouponsLoading ? (
-                    <p style={{ color: 'var(--text-secondary)' }}>Buscando cupons...</p>
-                  ) : (
-                    <div className="services-table-wrapper" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                      <button type="submit" className="payment-btn" style={{ margin: 0 }} disabled={isCreatingCoupon}>
+                        {isCreatingCoupon ? 'Criando...' : 'Criar Cupom'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* List of coupons */}
+                  <div className="panel-card" style={{ padding: '0', background: 'transparent', border: 'none', boxShadow: 'none' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--primary)' }}>Cupons Ativos</h3>
+                    <div className="services-table-wrapper">
                       <table className="smm-table">
                         <thead>
                           <tr>
                             <th>Código</th>
-                            <th>Tipo</th>
-                            <th>Bônus</th>
-                            <th>Mínimo</th>
+                            <th>Tipo / Valor</th>
+                            <th>Regras</th>
                             <th>Usos</th>
                             <th style={{ textAlign: 'center' }}>Ações</th>
                           </tr>
@@ -2329,28 +3403,28 @@ export default function Dashboard() {
                         <tbody>
                           {adminCoupons.length === 0 ? (
                             <tr>
-                              <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '16px' }}>
-                                Nenhum cupom cadastrado.
+                              <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                                Nenhum cupom criado ainda.
                               </td>
                             </tr>
                           ) : (
-                            adminCoupons.map((cp) => (
-                              <tr key={cp.code}>
-                                <td style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{cp.code}</td>
-                                <td>{cp.type === 'percentage' ? 'Percentual' : 'Fixo'}</td>
-                                <td style={{ fontWeight: 'bold', color: 'var(--success)' }}>
-                                  {cp.type === 'percentage' ? `${cp.value}%` : `R$ ${cp.value.toFixed(2)}`}
+                            adminCoupons.map((c) => (
+                              <tr key={c.code}>
+                                <td style={{ fontWeight: 'bold' }}>{c.code}</td>
+                                <td>
+                                  {c.type === 'percentage' ? `${c.value}%` : `R$ ${c.value.toFixed(2)}`}
                                 </td>
-                                <td>R$ {cp.minDeposit.toFixed(2)}</td>
                                 <td style={{ fontSize: '12px' }}>
-                                  {cp.usedCount} / {cp.maxUses || 'Ilimitado'}
+                                  Min Dep: R$ {c.minDeposit.toFixed(2)}
+                                </td>
+                                <td>
+                                  {c.usedCount} {c.maxUses ? `/ ${c.maxUses}` : '(Ilimitado)'}
                                 </td>
                                 <td style={{ textAlign: 'center' }}>
                                   <button
-                                    type="button"
-                                    className="delete-user-btn"
-                                    style={{ margin: 0, padding: '4px 8px', fontSize: '11px' }}
-                                    onClick={() => handleDeleteCoupon(cp.code)}
+                                    className="copy-btn"
+                                    style={{ margin: 0, padding: '4px 8px', fontSize: '11px', borderColor: 'var(--error)', color: 'var(--error)' }}
+                                    onClick={() => handleDeleteCoupon(c.code)}
                                   >
                                     Excluir
                                   </button>
@@ -2361,10 +3435,281 @@ export default function Dashboard() {
                         </tbody>
                       </table>
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
+            )}
+
+            {/* Sub-Tab: Suporte */}
+            {adminTab === 'suporte' && (
+              <div className="panel-card">
+                <div className="panel-header secondary">
+                  <div className="panel-header-icon" style={{ backgroundColor: 'rgba(108, 37, 226, 0.15)', color: 'var(--primary)' }}>💬</div>
+                  <div className="panel-header-info">
+                    <h2>Gerenciamento de Tickets de Suporte</h2>
+                    <p>Responda chamados de clientes ou altere seus status</p>
+                  </div>
+                </div>
+
+                {selectedTicketId === null ? (
+                  <div className="services-table-wrapper" style={{ marginTop: '20px' }}>
+                    <table className="smm-table">
+                      <thead>
+                        <tr>
+                          <th>Data</th>
+                          <th>Cliente</th>
+                          <th>Assunto</th>
+                          <th>Status</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tickets.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                              Nenhum ticket registrado no painel.
+                            </td>
+                          </tr>
+                        ) : (
+                          tickets.map((t) => {
+                            const statusMap = {
+                              aberto: { text: 'Aberto', class: 'pending' },
+                              respondido: { text: 'Respondido', class: 'success' },
+                              fechado: { text: 'Fechado', class: 'disabled' }
+                            };
+                            const statusInfo = statusMap[t.status] || { text: t.status, class: 'pending' };
+
+                            return (
+                              <tr key={t.id}>
+                                <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                  {new Date(t.createdAt).toLocaleString('pt-BR')}
+                                </td>
+                                <td style={{ fontWeight: '500' }}>{t.userEmail}</td>
+                                <td>{t.subject}</td>
+                                <td>
+                                  <span className={`badge ${statusInfo.class}`} style={{ padding: '4px 8px', fontSize: '11px' }}>
+                                    {statusInfo.text}
+                                  </span>
+                                </td>
+                                <td>
+                                  <button
+                                    className="copy-btn"
+                                    style={{ margin: 0, padding: '6px 12px', fontSize: '12px' }}
+                                    onClick={() => setSelectedTicketId(t.id)}
+                                  >
+                                    Visualizar / Responder
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  // Admin chat thread
+                  <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {(() => {
+                      const currentTicket = tickets.find(t => t.id === selectedTicketId);
+                      if (!currentTicket) {
+                        return (
+                          <div>
+                            <p>Ticket não encontrado.</p>
+                            <button className="copy-btn" onClick={() => setSelectedTicketId(null)}>Voltar</button>
+                          </div>
+                        );
+                      }
+
+                      const statusMap = {
+                        aberto: { text: 'Aberto', class: 'pending' },
+                        respondido: { text: 'Respondido', class: 'success' },
+                        fechado: { text: 'Fechado', class: 'disabled' }
+                      };
+                      const statusInfo = statusMap[currentTicket.status] || { text: currentTicket.status, class: 'pending' };
+
+                      return (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                            <div>
+                              <button 
+                                className="copy-btn" 
+                                style={{ margin: '0 12px 0 0', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                                onClick={() => setSelectedTicketId(null)}
+                              >
+                                ← Voltar
+                              </button>
+                              <h3 style={{ display: 'inline-block', fontSize: '18px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                                {currentTicket.subject} (Cliente: {currentTicket.userEmail})
+                              </h3>
+                              <span className={`badge ${statusInfo.class}`} style={{ marginLeft: '12px', padding: '4px 8px', fontSize: '11px' }}>
+                                {statusInfo.text}
+                              </span>
+                            </div>
+                            {currentTicket.status !== 'fechado' && (
+                              <button 
+                                className="copy-btn" 
+                                style={{ margin: 0, padding: '6px 12px', borderColor: 'var(--error)', color: 'var(--error)' }}
+                                onClick={() => handleCloseTicket(currentTicket.id)}
+                              >
+                                Fechar Ticket
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Chat messages */}
+                          <div style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            gap: '12px', 
+                            maxHeight: '400px', 
+                            overflowY: 'auto', 
+                            padding: '16px', 
+                            borderRadius: '12px', 
+                            backgroundColor: 'var(--bg-tertiary)',
+                            border: '1px solid var(--border-color)' 
+                          }}>
+                            {selectedTicketMessages.length === 0 ? (
+                              <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Nenhuma mensagem.</p>
+                            ) : (
+                              selectedTicketMessages.map((msg) => {
+                                const isAdmin = msg.sender === 'admin';
+                                return (
+                                  <div 
+                                    key={msg.id} 
+                                    style={{ 
+                                      alignSelf: isAdmin ? 'flex-end' : 'flex-start',
+                                      maxWidth: '75%',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      alignItems: isAdmin ? 'flex-end' : 'flex-start'
+                                    }}
+                                  >
+                                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px', padding: '0 4px' }}>
+                                      {isAdmin ? 'Você (Admin)' : `Cliente (${currentTicket.userEmail})`}
+                                    </span>
+                                    <div style={{ 
+                                      padding: '12px 16px', 
+                                      borderRadius: '16px', 
+                                      borderTopLeftRadius: isAdmin ? '16px' : '4px',
+                                      borderTopRightRadius: isAdmin ? '4px' : '16px',
+                                      backgroundColor: isAdmin ? 'var(--primary)' : 'var(--bg-card)',
+                                      color: isAdmin ? 'white' : 'var(--text-primary)',
+                                      border: isAdmin ? 'none' : '1px solid var(--border-color)',
+                                      fontSize: '14px',
+                                      lineHeight: '1.5',
+                                      wordBreak: 'break-word'
+                                    }}>
+                                      {msg.message}
+                                    </div>
+                                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px', padding: '0 4px' }}>
+                                      {new Date(msg.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {/* Reply Form */}
+                          {currentTicket.status === 'fechado' ? (
+                            <div className="payment-status-banner pending" style={{ margin: 0, textAlign: 'center' }}>
+                              Este chamado está encerrado. Se necessário, reabra ou oriente o cliente a abrir outro.
+                            </div>
+                          ) : (
+                            <form onSubmit={handleSendReply} style={{ display: 'flex', gap: '12px' }}>
+                              <input 
+                                type="text" 
+                                className="form-input" 
+                                placeholder="Digite sua resposta administrativa..." 
+                                value={ticketReply}
+                                onChange={(e) => setTicketReply(e.target.value)}
+                                required
+                                style={{ flexGrow: 1 }}
+                              />
+                              <button type="submit" className="payment-btn" style={{ margin: 0, padding: '0 24px', flexShrink: 0 }}>
+                                Enviar Resposta
+                              </button>
+                            </form>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'perfil' && (
+          <div className="panel-card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+            <div className="panel-header">
+              <div className="panel-header-icon">👤</div>
+              <div className="panel-header-info">
+                <h2>Configurações da Conta</h2>
+                <p>Altere a senha da sua conta para manter seus dados seguros.</p>
+              </div>
             </div>
+
+            {changePasswordFeedback && (
+              <div className={`payment-status-banner ${changePasswordFeedback.success ? 'approved' : 'pending'}`} style={{ marginBottom: '20px', justifyContent: 'center' }}>
+                {changePasswordFeedback.message}
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword}>
+              <div className="form-group">
+                <label className="form-label">E-mail da Conta</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={user?.email || ''}
+                  disabled
+                  style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Senha Atual</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="Sua senha atual"
+                  value={changePasswordCurrent}
+                  onChange={(e) => setChangePasswordCurrent(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Nova Senha</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="Mínimo 6 caracteres"
+                  value={changePasswordNew}
+                  onChange={(e) => setChangePasswordNew(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Confirmar Nova Senha</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="Repita a nova senha"
+                  value={changePasswordConfirm}
+                  onChange={(e) => setChangePasswordConfirm(e.target.value)}
+                  required
+                />
+              </div>
+
+              <button type="submit" className="submit-btn" style={{ marginTop: '10px' }} disabled={changePasswordLoading}>
+                {changePasswordLoading ? 'Alterando Senha...' : 'Alterar Senha'}
+              </button>
+            </form>
           </div>
         )}
       </main>
