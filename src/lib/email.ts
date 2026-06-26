@@ -11,9 +11,13 @@ export async function sendPasswordResetEmail(email: string, code: string): Promi
     return true; // Return true so the flow continues in dev
   }
 
+  // Determine the from address: use custom domain if configured, else use sandbox address
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const fromName = process.env.RESEND_FROM_NAME || 'Goobox';
+
   try {
     const { error } = await resend.emails.send({
-      from: 'Goobox <onboarding@resend.dev>',
+      from: `${fromName} <${fromEmail}>`,
       to: email,
       subject: `${code} é o seu código de recuperação - Goobox`,
       html: `
@@ -97,6 +101,22 @@ export async function sendPasswordResetEmail(email: string, code: string): Promi
     });
 
     if (error) {
+      // In Resend sandbox mode, emails can only be sent to verified addresses.
+      // We log the error but return true so the OTP flow doesn't break during dev/testing.
+      // The OTP code is always printed to the server console above.
+      const isSandboxError =
+        typeof error.message === 'string' &&
+        (error.message.includes('verify') || error.message.includes('domain') || error.message.includes('not allowed'));
+
+      if (isSandboxError) {
+        console.warn(
+          `⚠️  Resend sandbox mode: não foi possível enviar para ${email} (e-mail não verificado no Resend).\n` +
+          `   Código OTP disponível acima no console do servidor.\n` +
+          `   Para enviar a qualquer e-mail, configure um domínio próprio no Resend e adicione RESEND_FROM_EMAIL no .env.local`
+        );
+        return true; // Don't block the user flow
+      }
+
       console.error('❌ Resend error:', error);
       return false;
     }

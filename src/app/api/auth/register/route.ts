@@ -29,10 +29,13 @@ export async function POST(request: Request) {
       balance: 0.00
     });
 
+    // Remove passwordHash before returning to client
+    const { passwordHash: _, ...clientUser } = user;
+
     return NextResponse.json({
       success: true,
       message: 'Usuário registrado com sucesso!',
-      user
+      user: clientUser
     });
   } catch (error) {
     console.error('Error during registration:', error);

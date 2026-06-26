@@ -1309,30 +1309,101 @@ export const dbHelper = {
   // ─── OTP Reset Token Management ──────────────────────────────────────────────
 
   saveResetToken: async (email: string, tokenHash: string, expiresAt: string): Promise<void> => {
+    const normalizedEmail = email.toLowerCase();
+
+    if (supabase) {
+      try {
+        // Invalidate any existing tokens for this email first
+        await supabase
+          .from('reset_tokens')
+          .update({ used: true })
+          .eq('email', normalizedEmail);
+
+        const { error } = await supabase
+          .from('reset_tokens')
+          .insert({
+            email: normalizedEmail,
+            token_hash: tokenHash,
+            expires_at: expiresAt,
+            used: false
+          });
+
+        if (error) throw error;
+        return;
+      } catch (err) {
+        console.error('Supabase saveResetToken failed, falling back to local:', err);
+      }
+    }
+
+    // Local Fallback
     const db = getLocalDb();
     if (!db.resetTokens) db.resetTokens = [];
-    // Remove any existing token for this email
-    db.resetTokens = db.resetTokens.filter(t => t.email.toLowerCase() !== email.toLowerCase());
-    // Add new token
-    db.resetTokens.push({ email: email.toLowerCase(), tokenHash, expiresAt, used: false });
+    db.resetTokens = db.resetTokens.filter(t => t.email.toLowerCase() !== normalizedEmail);
+    db.resetTokens.push({ email: normalizedEmail, tokenHash, expiresAt, used: false });
     saveLocalDb(db);
   },
 
   getResetToken: async (email: string): Promise<ResetToken | null> => {
+    const normalizedEmail = email.toLowerCase();
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('reset_tokens')
+          .select('*')
+          .eq('email', normalizedEmail)
+          .eq('used', false)
+          .gt('expires_at', new Date().toISOString())
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) return null;
+
+        return {
+          email: data.email,
+          tokenHash: data.token_hash,
+          expiresAt: data.expires_at,
+          used: data.used
+        };
+      } catch (err) {
+        console.error('Supabase getResetToken failed, falling back to local:', err);
+      }
+    }
+
+    // Local Fallback
     const db = getLocalDb();
     const token = (db.resetTokens || []).find(
-      t => t.email.toLowerCase() === email.toLowerCase() && !t.used
+      t => t.email.toLowerCase() === normalizedEmail && !t.used
     );
     if (!token) return null;
-    // Check expiration
     if (new Date(token.expiresAt) < new Date()) return null;
     return token;
   },
 
   invalidateResetToken: async (email: string): Promise<void> => {
+    const normalizedEmail = email.toLowerCase();
+
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('reset_tokens')
+          .update({ used: true })
+          .eq('email', normalizedEmail)
+          .eq('used', false);
+
+        if (error) throw error;
+        return;
+      } catch (err) {
+        console.error('Supabase invalidateResetToken failed, falling back to local:', err);
+      }
+    }
+
+    // Local Fallback
     const db = getLocalDb();
     if (!db.resetTokens) return;
-    const token = db.resetTokens.find(t => t.email.toLowerCase() === email.toLowerCase());
+    const token = db.resetTokens.find(t => t.email.toLowerCase() === normalizedEmail);
     if (token) {
       token.used = true;
       saveLocalDb(db);

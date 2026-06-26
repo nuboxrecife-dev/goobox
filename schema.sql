@@ -60,23 +60,6 @@ CREATE TABLE IF NOT EXISTS settings (
 -- Insert default markup settings
 INSERT INTO settings (key, value) VALUES ('service_markup_percent', '20') ON CONFLICT DO NOTHING;
 
--- Enable RLS (Row Level Security) if needed or keep simple for admin backend connections
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE services ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
-
--- Create policies to allow all actions from service role key (backend operations)
-CREATE POLICY "Allow all to service_role" ON users USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all to service_role" ON services USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all to service_role" ON orders USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all to service_role" ON payments USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all to service_role" ON settings USING (true) WITH CHECK (true);
-
--- Migration statement for already initialized databases
-ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user' NOT NULL;
-
 -- 6. Create COUPONS table
 CREATE TABLE IF NOT EXISTS coupons (
     code VARCHAR(50) PRIMARY KEY,
@@ -104,12 +87,40 @@ CREATE TABLE IF NOT EXISTS payment_coupons (
     bonus_amount DECIMAL(15, 2) NOT NULL
 );
 
--- Enable RLS and add policies
+-- 9. Create RESET_TOKENS table for OTP-based password recovery
+CREATE TABLE IF NOT EXISTS reset_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) NOT NULL,
+    token_hash VARCHAR(64) NOT NULL,  -- SHA-256 hex of the 6-digit OTP
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Index for fast email lookup
+CREATE INDEX IF NOT EXISTS idx_reset_tokens_email ON reset_tokens(email);
+
+-- Enable RLS (Row Level Security) if needed or keep simple for admin backend connections
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE services ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coupons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coupon_uses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_coupons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reset_tokens ENABLE ROW LEVEL SECURITY;
 
+-- Create policies to allow all actions from service role key (backend operations)
+CREATE POLICY "Allow all to service_role" ON users USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON services USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON orders USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON payments USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON settings USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all to service_role" ON coupons USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all to service_role" ON coupon_uses USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all to service_role" ON payment_coupons USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all to service_role" ON reset_tokens USING (true) WITH CHECK (true);
 
+-- Migration statement for already initialized databases
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user' NOT NULL;
